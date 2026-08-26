@@ -48,7 +48,16 @@ describe("AlibabaQwenImageProvider", () => {
       fetchImplementation,
     });
 
-    const result = await provider.generateVariation(input);
+    const result = await provider.generateVariation({
+      ...input,
+      referenceImages: [
+        {
+          bytes: new Uint8Array([4, 5, 6]),
+          fileName: "stable-anchor.png",
+          mimeType: "image/png",
+        },
+      ],
+    });
     const generationRequest = fetchImplementation.mock.calls[0];
     const requestBody = JSON.parse(String(generationRequest?.[1]?.body)) as {
       model: string;
@@ -68,8 +77,9 @@ describe("AlibabaQwenImageProvider", () => {
       "https://workspace.example.com/api/v1/services/aigc/multimodal-generation/generation",
     );
     expect(requestBody.model).toBe("qwen-image-2.0-pro-2026-06-22");
-    expect(requestBody.input.messages[0]?.content[0]?.image).toMatch(/^data:image\/jpeg;base64,/);
-    expect(requestBody.input.messages[0]?.content[1]?.text).toContain("必须从结果中完全删除");
+    expect(requestBody.input.messages[0]?.content[0]?.image).toMatch(/^data:image\/png;base64,/);
+    expect(requestBody.input.messages[0]?.content[1]?.image).toMatch(/^data:image\/jpeg;base64,/);
+    expect(requestBody.input.messages[0]?.content[2]?.text).toContain("必须从结果中完全删除");
     expect(requestBody.parameters).toMatchObject({
       n: 1,
       prompt_extend: false,

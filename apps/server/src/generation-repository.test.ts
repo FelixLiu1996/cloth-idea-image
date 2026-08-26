@@ -75,6 +75,7 @@ describe("GenerationResultRepository", () => {
       baseSummary: "快速衍生",
       baseRequestFingerprint: "request",
       revisionInstructions: [],
+      iterationAnchorJobId: result.jobId,
     });
 
     expect(repository.get(result.jobId)?.response).toEqual(result);

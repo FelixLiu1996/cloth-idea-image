@@ -161,7 +161,11 @@ export class AlibabaWanProvider implements GarmentImageProvider {
             messages: [
               {
                 role: "user",
-                content: [{ text: input.prompt }, { image: toDataUrl(input.sourceImage) }],
+                content: [
+                  { text: input.prompt },
+                  ...(input.referenceImages ?? []).map((image) => ({ image: toDataUrl(image) })),
+                  { image: toDataUrl(input.sourceImage) },
+                ],
               },
             ],
           },

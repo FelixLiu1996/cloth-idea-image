@@ -36,6 +36,7 @@ export interface GarmentGenerationInput {
 
 export interface GarmentImageProviderInput {
   readonly sourceImage: SourceImageInput;
+  readonly referenceImages?: readonly SourceImageInput[];
   readonly prompt: string;
   readonly outputCount: 1;
   readonly promptVersion: GarmentGenerationInput["promptVersion"];

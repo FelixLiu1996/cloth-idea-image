@@ -159,8 +159,9 @@ POST /api/v1/generations multipart + analysisId + directionId
   → 返回稳定 GenerationApiResponse
 
 POST /api/v1/generations/{jobId}/refinements JSON
-  → 读取父结果图和原始基础 Prompt
-  → 确定性追加累计修改指令
+  → 读取父结果图、分支稳定基准图和原始基础 Prompt
+  → 本轮指令前置并确定性追加累计修改指令
+  → 第二次及后续修改以父结果为编辑底图、以分支首次结果校准画质
   → 使用 garment-iteration-v1 调用当前生图 Provider
   → 保存新结果及 parentJobId
 ```
@@ -171,7 +172,7 @@ POST /api/v1/generations/{jobId}/refinements JSON
 - 分析记录只保存原图不可逆 SHA-256，不保存原图 Base64 或文件。
 - `Idempotency-Key` 分别防止分析和生图重复计费。
 - 生成幂等记录同时保存请求指纹；同一幂等键用于不同请求时返回冲突，不复用错误结果。
-- 同方向再生成仍上传并使用原图；继续修改使用父结果图，同时继承原始保留项、证据门结果和选中方向。
+- 同方向再生成仍上传并使用原图；继续修改使用父结果图，同时继承原始保留项、证据门结果和选中方向。第二次及后续修改额外传入分支首次生成结果作为稳定基准，当前父结果始终是实际编辑底图。
 - 结果父子关系与基础 Prompt 仅保存在服务进程内；客户端历史仅保存在当前页面状态中。
 - 不提供 `analysisId` 与 `directionId` 时仍走 `garment-redesign-v1` 直接生成，用于降级和 A/B 对照。
 - 当前实现只用于本地开发和真实效果验证，不用于公开部署。

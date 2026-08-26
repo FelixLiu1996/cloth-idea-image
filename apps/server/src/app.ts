@@ -207,6 +207,7 @@ function createRequestFingerprint(value: object): string {
 
 interface RunGenerationOptions {
   readonly sourceImage: SourceImageInput;
+  readonly referenceImages?: readonly SourceImageInput[];
   readonly prompt: string;
   readonly promptVersion: GenerationPromptVersion;
   readonly summary: string;
@@ -220,6 +221,7 @@ interface RunGenerationOptions {
   readonly operation: GenerationOperation;
   readonly parentJobId: string | null;
   readonly revisionInstruction: string | null;
+  readonly iterationAnchorJobId?: string;
 }
 
 export async function buildApp(options: BuildAppOptions): Promise<FastifyInstance> {
@@ -235,6 +237,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   ): Promise<GenerationApiResponse> {
     const providerResult = await options.provider.generateVariation({
       sourceImage: input.sourceImage,
+      ...(input.referenceImages ? { referenceImages: input.referenceImages } : {}),
       prompt: input.prompt,
       outputCount: 1,
       promptVersion: input.promptVersion,
@@ -271,6 +274,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       baseSummary: input.baseSummary,
       baseRequestFingerprint: input.baseRequestFingerprint,
       revisionInstructions: input.revisionInstructions,
+      iterationAnchorJobId: input.iterationAnchorJobId ?? jobId,
     });
 
     request.log.info(
@@ -501,10 +505,34 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
         throw new RequestError(410, "PARENT_ASSET_EXPIRED", "上一张结果图片已过期，无法继续修改。");
       }
 
+      const stableAnchorRecord = repository.get(parent.iterationAnchorJobId);
+      if (!stableAnchorRecord) {
+        throw new RequestError(
+          410,
+          "ITERATION_ANCHOR_EXPIRED",
+          "当前分支的稳定基准图已过期，无法安全地继续修改。",
+        );
+      }
+      const needsStableAnchor = stableAnchorRecord.response.jobId !== parent.response.jobId;
+      const stableAnchorAsset = needsStableAnchor
+        ? await assetStore.readResult(
+            stableAnchorRecord.response.jobId,
+            stableAnchorRecord.assetFileName,
+          )
+        : null;
+      if (needsStableAnchor && !stableAnchorAsset) {
+        throw new RequestError(
+          410,
+          "ITERATION_ANCHOR_EXPIRED",
+          "当前分支的稳定基准图已过期，无法安全地继续修改。",
+        );
+      }
+
       const revisionInstructions = [...parent.revisionInstructions, parsedBody.data.instruction];
       const prompt = compileGarmentIterationPrompt({
         basePrompt: parent.basePrompt,
         revisionInstructions,
+        hasStableAnchorImage: stableAnchorAsset !== null,
       });
       const sourceImage: SourceImageInput = {
         bytes: parentAsset.bytes,
@@ -522,6 +550,17 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
         () =>
           runGeneration(request, {
             sourceImage,
+            ...(stableAnchorAsset
+              ? {
+                  referenceImages: [
+                    {
+                      bytes: stableAnchorAsset.bytes,
+                      fileName: stableAnchorRecord.assetFileName,
+                      mimeType: stableAnchorAsset.mimeType,
+                    },
+                  ],
+                }
+              : {}),
             prompt,
             promptVersion: "garment-iteration-v1",
             summary: `${parent.baseSummary} · 继续修改：${parsedBody.data.instruction}`,
@@ -535,6 +574,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
             operation: "refine",
             parentJobId: parent.response.jobId,
             revisionInstruction: parsedBody.data.instruction,
+            iterationAnchorJobId: parent.iterationAnchorJobId,
           }),
       );
 

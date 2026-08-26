@@ -121,5 +121,20 @@ describe("compileAnalyzedGarmentPrompt", () => {
     expect(prompt).toContain("2. 门襟改成隐藏拉链");
     expect(prompt).toContain("本轮重点：门襟改成隐藏拉链");
     expect(prompt.match(/袖型再宽松一点/g)).toHaveLength(1);
+    expect(prompt.indexOf("本轮重点：门襟改成隐藏拉链")).toBeLessThan(
+      prompt.indexOf("必须完整保留：格纹袖口"),
+    );
+  });
+
+  it("describes the stable anchor and previous result roles for repeated edits", () => {
+    const prompt = compileGarmentIterationPrompt({
+      basePrompt: "必须完整保留：白色绗缝。",
+      revisionInstructions: ["袖口增加收束", "增加一个斜向拉链袋"],
+      hasStableAnchorImage: true,
+    });
+
+    expect(prompt).toContain("图一是本分支首次生成的稳定基准版");
+    expect(prompt).toContain("图二是需要继续修改的上一版");
+    expect(prompt).toContain("必须以图二为编辑底图");
   });
 });

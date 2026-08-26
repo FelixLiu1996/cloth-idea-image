@@ -98,9 +98,9 @@
 }
 ```
 
-`instruction` 为2至500字符。服务端读取父结果图作为本轮参考图，以父任务保存的基础 Prompt 为起点，使用 `garment-iteration-v1` 确定性追加累计修改要求。原始保留项、证据门事实、选中方向和禁止项继续生效。单条父子分支最多连续修改5次，超过时返回 `REFINEMENT_LIMIT_REACHED`，避免提示词和付费调用无边界增长。
+`instruction` 为2至500字符。服务端读取父结果图作为本轮编辑底图，以父任务保存的基础 Prompt 为起点，使用 `garment-iteration-v1` 确定性追加累计修改要求，并把本轮指令放在提示词前部。第一次修改只使用父结果；第二次及后续修改还会把本分支首次生成结果作为稳定基准图，帮助约束白平衡、面料颜色、纹理和未修改结构。原始保留项、证据门事实、选中方向和禁止项继续生效。单条父子分支最多连续修改5次，超过时返回 `REFINEMENT_LIMIT_REACHED`，避免提示词和付费调用无边界增长。
 
-成功响应仍为 `GenerationApiResponse`，其中 `operation` 为 `refine`，`parentJobId` 指向被修改的结果，`revisionInstruction` 为本轮指令。父记录不存在时返回 `PARENT_GENERATION_NOT_FOUND`；父图片已经清理时返回 `PARENT_ASSET_EXPIRED`。
+成功响应仍为 `GenerationApiResponse`，其中 `operation` 为 `refine`，`parentJobId` 指向被修改的结果，`revisionInstruction` 为本轮指令。父记录不存在时返回 `PARENT_GENERATION_NOT_FOUND`；父图片已经清理时返回 `PARENT_ASSET_EXPIRED`；稳定基准记录或图片已清理时返回 `ITERATION_ANCHOR_EXPIRED`，不会在缺少画质锚点时静默继续多代编辑。
 
 ## 读取结果图
 
@@ -126,7 +126,7 @@
 - `400`：缺图或表单参数错误。
 - `404`：分析已过期或方向不存在。
 - `409`：当前原图与分析时不一致、父任务不匹配，或同一幂等键被用于不同请求。
-- `410`：继续修改所需的父结果图片已经过期。
+- `410`：继续修改所需的父结果图片或稳定基准图已经过期。
 - `413`：图片超过10 MB。
 - `415`：图片类型不支持。
 - `422`：模型拒绝输入。

@@ -346,6 +346,7 @@ describe("generation API", () => {
       });
       const refinementProviderInput = context.provider.generateVariation.mock.calls[2]?.[0];
       expect(refinementProviderInput?.sourceImage.fileName).toBe("result.png");
+      expect(refinementProviderInput?.referenceImages).toBeUndefined();
       expect(refinementProviderInput?.promptVersion).toBe("garment-iteration-v1");
       expect(refinementProviderInput?.prompt).toContain("口袋不得左右对称");
       expect(refinementProviderInput?.prompt).toContain("袖型再宽松一点，但保留格纹袖口");
@@ -370,6 +371,12 @@ describe("generation API", () => {
         });
         expect(nextRefinementResponse.statusCode).toBe(201);
         lastRefined = nextRefinementResponse.json<GenerationApiResponse>();
+        if (index === 2) {
+          const repeatedEditProviderInput = context.provider.generateVariation.mock.calls[3]?.[0];
+          expect(repeatedEditProviderInput?.referenceImages).toHaveLength(1);
+          expect(repeatedEditProviderInput?.prompt).toContain("图一是本分支首次生成的稳定基准版");
+          expect(repeatedEditProviderInput?.prompt).toContain("必须以图二为编辑底图");
+        }
       }
 
       const overLimitResponse = await context.app.inject({
