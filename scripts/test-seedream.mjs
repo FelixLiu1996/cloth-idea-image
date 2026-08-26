@@ -27,26 +27,23 @@ if (!new Set(["jpeg", "png", "webp"]).has(mimeSubtype)) {
   throw new Error("输入图片仅支持 JPG、PNG 或 WEBP。");
 }
 
-const response = await fetch(
-  "https://ark.cn-beijing.volces.com/api/v3/images/generations",
-  {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      prompt,
-      image: [`data:image/${mimeSubtype};base64,${imageBytes.toString("base64")}`],
-      size: "2K",
-      response_format: "url",
-      sequential_image_generation: "disabled",
-      stream: false,
-      watermark: false,
-    }),
+const response = await fetch("https://ark.cn-beijing.volces.com/api/v3/images/generations", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${apiKey}`,
+    "Content-Type": "application/json",
   },
-);
+  body: JSON.stringify({
+    model,
+    prompt,
+    image: [`data:image/${mimeSubtype};base64,${imageBytes.toString("base64")}`],
+    size: "2K",
+    response_format: "url",
+    sequential_image_generation: "disabled",
+    stream: false,
+    watermark: false,
+  }),
+});
 
 const payload = await response.json();
 if (!response.ok) {

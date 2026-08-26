@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "target": "ES2017",
+    "module": "CommonJS",
+    "removeComments": false,
+    "preserveConstEnums": true,
+    "moduleResolution": "node",
+    "experimentalDecorators": true,
+    "outDir": "lib",
+    "sourceMap": true,
+    "rootDir": "../..",
+    "jsx": "react-jsx",
+    "allowJs": true
+  },
+  "include": ["./src", "./types", "./config"],
+  "compileOnSave": false
+}

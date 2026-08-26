@@ -16,9 +16,7 @@ if (!baseUrl) {
 }
 
 if (!imageArg) {
-  throw new Error(
-    "请提供服装图片路径，例如：npm run test:wan -- /absolute/path/to/garment.jpg",
-  );
+  throw new Error("请提供服装图片路径，例如：npm run test:wan -- /absolute/path/to/garment.jpg");
 }
 
 const imagePath = resolve(imageArg);
@@ -32,39 +30,36 @@ if (!new Set(["jpeg", "png", "webp"]).has(mimeSubtype)) {
   throw new Error("输入图片仅支持 JPG、PNG 或 WEBP。");
 }
 
-const response = await fetch(
-  `${baseUrl}/services/aigc/multimodal-generation/generation`,
-  {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      input: {
-        messages: [
-          {
-            role: "user",
-            content: [
-              { text: prompt },
-              {
-                image: `data:image/${mimeSubtype};base64,${imageBytes.toString("base64")}`,
-              },
-            ],
-          },
-        ],
-      },
-      parameters: {
-        size: "2K",
-        n: 1,
-        watermark: false,
-        enable_interleave: false,
-        prompt_extend: true,
-      },
-    }),
+const response = await fetch(`${baseUrl}/services/aigc/multimodal-generation/generation`, {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${apiKey}`,
+    "Content-Type": "application/json",
   },
-);
+  body: JSON.stringify({
+    model,
+    input: {
+      messages: [
+        {
+          role: "user",
+          content: [
+            { text: prompt },
+            {
+              image: `data:image/${mimeSubtype};base64,${imageBytes.toString("base64")}`,
+            },
+          ],
+        },
+      ],
+    },
+    parameters: {
+      size: "2K",
+      n: 1,
+      watermark: false,
+      enable_interleave: false,
+      prompt_extend: true,
+    },
+  }),
+});
 
 const payload = await response.json();
 if (!response.ok || payload.code) {
@@ -72,9 +67,8 @@ if (!response.ok || payload.code) {
   throw new Error(`万相调用失败（HTTP ${response.status}）：${message}`);
 }
 
-const contents = payload?.output?.choices?.flatMap(
-  (choice) => choice?.message?.content || [],
-) || [];
+const contents =
+  payload?.output?.choices?.flatMap((choice) => choice?.message?.content || []) || [];
 const imageResult = contents.find((content) => content.type === "image" && content.image);
 
 if (!imageResult) {

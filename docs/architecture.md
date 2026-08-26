@@ -16,11 +16,10 @@ Taro 客户端
         │
         ▼
 业务 API / 任务服务
-├── 匿名会话与用户
-├── 上传与对象存储
+├── 上传校验与资源存储
 ├── 设计方向与提示词
-├── 生图任务与额度控制
-└── 结果与历史记录
+├── 生图任务与幂等控制
+└── 结果访问
         │
         ▼
 Model Provider 层
@@ -28,9 +27,9 @@ Model Provider 层
 └── Volcengine Seedream Provider
 ```
 
-## 3. 计划中的仓库结构
+## 3. 当前仓库结构
 
-正式应用初始化后采用以下结构：
+当前正式应用采用以下结构：
 
 ```text
 apps/
@@ -38,16 +37,15 @@ apps/
 └── server/                 # Node.js TypeScript API
 packages/
 ├── domain/                 # 业务类型、规则和用例
-├── model-providers/        # 万相、Seedream适配器
-├── platform/               # 上传、分享、登录等平台适配
-├── shared/                 # 通用类型、校验和错误码
-└── config/                 # ESLint、TypeScript等共享配置
+└── model-providers/        # 万相与后续模型适配器
 docs/
 prompts/
 scripts/
 ```
 
-当前验证脚本保留在 `scripts/`，正式 Provider 完成并覆盖验证能力后再决定是否迁移或删除。
+客户端内部的 `platform/` 隔离 Taro 图片选择能力，`services/` 负责本项目 API。共享 TypeScript、ESLint、Prettier 和 Vitest 配置当前保存在仓库根目录，达到多个实现后再提取独立配置包。
+
+验证脚本保留在 `scripts/`，用于显式执行付费模型冒烟测试，不进入普通 CI。
 
 ## 4. 客户端边界
 
@@ -97,10 +95,10 @@ interface PlatformAdapter {
 ```ts
 interface GarmentImageProvider {
   readonly provider: "alibaba-wan" | "volcengine-seedream";
+  readonly model: string;
+  readonly configured: boolean;
 
-  generateVariation(
-    input: GarmentGenerationInput,
-  ): Promise<GarmentGenerationResult>;
+  generateVariation(input: GarmentGenerationInput): Promise<GarmentGenerationResult>;
 }
 ```
 
@@ -121,7 +119,29 @@ interface GarmentImageProvider {
 - 耗时和可获取的用量信息。
 - 标准化错误。
 
-## 7. 任务状态
+## 7. 当前本地实现
+
+第一条纵向切片采用同步请求：
+
+```text
+POST multipart
+  → 参数与文件校验
+  → 构造版本化提示词
+  → Alibaba Wan Provider
+  → 下载厂商临时结果
+  → var/assets/{jobId}/result.{ext}
+  → 返回稳定 GenerationApiResponse
+```
+
+- 任务和幂等结果保存在服务进程内。
+- 结果图保存在被 Git 忽略的本地目录。
+- 原图只在当前请求内存中传递，不在本地持久化。
+- `Idempotency-Key` 在同一服务进程内防止成功请求重复计费。
+- 当前实现只用于本地开发和真实效果验证，不用于公开部署。
+
+完整接口见 [API 契约](api-contract.md)。
+
+## 8. 目标任务状态
 
 ```text
 draft
@@ -139,7 +159,7 @@ draft
 - 厂商返回成功后必须立即转存临时结果 URL。
 - 任务删除时同步安排原图和结果图删除。
 
-## 8. 数据模型草案
+## 9. 数据模型草案
 
 - `sessions`：匿名或登录会话。
 - `garment_projects`：一次服装改款项目。
@@ -150,7 +170,7 @@ draft
 
 数据库只保存必要的文件引用，不保存完整图片 Base64。
 
-## 9. 安全与成本控制
+## 10. 安全与成本控制
 
 - Key 只通过服务端环境变量或密钥管理服务加载。
 - 所有生成接口设置用户级和 IP 级限流。
@@ -159,7 +179,7 @@ draft
 - 日志对 Authorization、图片地址签名参数和用户输入中的敏感信息脱敏。
 - 公开上线前更换开发期已经展示过的所有 Key。
 
-## 10. 部署阶段
+## 11. 部署阶段
 
 ### 阶段一：本地开发
 

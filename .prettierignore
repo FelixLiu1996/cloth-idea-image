@@ -4,5 +4,8 @@ node_modules/
 dist/
 build/
 coverage/
+package-lock.json
 outputs/
 uploads/
+var/
+apps/client/src/index.html

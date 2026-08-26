@@ -7,12 +7,18 @@ node_modules/
 dist/
 build/
 .cache/
+.swc/
 .turbo/
 coverage/
+*.tsbuildinfo
 
 # Local generated and uploaded assets
 outputs/
 uploads/
+var/
+
+# WeChat developer tool local settings
+project.private.config.json
 
 # Logs and operating-system files
 *.log

@@ -10,8 +10,8 @@
 
 ## 2. 运行环境
 
-- Node.js 20 或更高版本。
-- 正式应用初始化后统一使用仓库锁定的 npm 版本和 lockfile。
+- Node.js 20.17 或更高版本、npm 10 或更高版本。
+- 所有工作区统一使用根 `package-lock.json`，禁止在子目录创建独立锁文件。
 - TypeScript 开启 `strict`、`noUncheckedIndexedAccess` 和 `exactOptionalPropertyTypes`。
 - 统一使用 UTF-8、LF 和文件末尾换行。
 
@@ -114,14 +114,14 @@
 
 ## 11. 文档更新规则
 
-| 变化类型 | 必须更新 |
-|---|---|
-| 用户可感知功能或行为 | `CHANGELOG.md`、相关产品文档 |
-| 当前进度、阻塞、下一步 | `docs/current-status.md` |
-| 模型、参数、提示词或效果测试 | `docs/model-evaluation-log.md` |
-| 架构或不可轻易逆转的决定 | `docs/decisions/` 新增 ADR |
-| 环境变量 | `.env.example`、README 或部署说明 |
-| 公共 API/数据结构 | 架构文档和契约测试 |
+| 变化类型                     | 必须更新                          |
+| ---------------------------- | --------------------------------- |
+| 用户可感知功能或行为         | `CHANGELOG.md`、相关产品文档      |
+| 当前进度、阻塞、下一步       | `docs/current-status.md`          |
+| 模型、参数、提示词或效果测试 | `docs/model-evaluation-log.md`    |
+| 架构或不可轻易逆转的决定     | `docs/decisions/` 新增 ADR        |
+| 环境变量                     | `.env.example`、README 或部署说明 |
+| 公共 API/数据结构            | 架构文档和契约测试                |
 
 不需要为纯格式化、错别字或不改变行为的局部重命名单独写变更日志，但 Git 提交仍应清晰。
 
@@ -133,3 +133,27 @@
 - 安全、隐私和调用费用风险经过检查。
 - 相关测试通过。
 - 文档与记录已同步。
+
+## 13. 常用命令
+
+```bash
+# 本地开发，分别在两个终端运行
+npm run dev:server
+npm run dev:client
+
+# 质量检查
+npm run check:docs
+npm run format:check
+npm run typecheck
+npm run lint
+npm run test
+
+# 生产构建验证
+npm run build
+npm run build:weapp
+
+# 只检查服务端生产依赖安全告警
+npm audit --omit=dev
+```
+
+完整提交前使用 `npm run check`。真正调用付费模型的 `test:wan` 和 `test:seedream` 不包含在该命令中，必须由开发者显式执行。

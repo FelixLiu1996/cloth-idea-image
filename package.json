@@ -1,10 +1,48 @@
 {
   "name": "cloth-idea-image",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
+  "packageManager": "npm@10.8.2",
+  "engines": {
+    "node": ">=20.17.0",
+    "npm": ">=10"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
+    "build": "npm run build:packages && npm run build:server && npm run build:client",
+    "build:client": "npm run build:h5 -w @cloth-idea/client",
+    "build:packages": "npm run build -w @cloth-idea/domain && npm run build -w @cloth-idea/model-providers",
+    "build:server": "npm run build -w @cloth-idea/server",
+    "build:weapp": "npm run build:packages && npm run build:weapp -w @cloth-idea/client",
+    "check": "npm run check:docs && npm run format:check && npm run typecheck && npm run lint && npm run test && npm run build",
     "check:docs": "node scripts/check-doc-links.mjs",
+    "dev:client": "npm run build -w @cloth-idea/domain && npm run dev:h5 -w @cloth-idea/client",
+    "dev:server": "npm run build:packages && node --env-file=.env.local --watch --import tsx apps/server/src/index.ts",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "start:server": "node --env-file=.env.local apps/server/dist/index.js",
+    "test": "vitest run",
     "test:seedream": "node --env-file=.env.local scripts/test-seedream.mjs",
-    "test:wan": "node --env-file=.env.local scripts/test-wan.mjs"
+    "test:wan": "node --env-file=.env.local scripts/test-wan.mjs",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.5",
+    "@types/node": "20.19.25",
+    "eslint": "9.39.5",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "eslint-plugin-react-refresh": "0.5.5",
+    "globals": "17.11.0",
+    "prettier": "3.9.6",
+    "tsup": "8.5.1",
+    "tsx": "4.23.12",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.55.0",
+    "vitest": "4.1.11"
   }
 }
