@@ -1,0 +1,10 @@
+{
+  "name": "cloth-idea-image",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check:docs": "node scripts/check-doc-links.mjs",
+    "test:seedream": "node --env-file=.env.local scripts/test-seedream.mjs",
+    "test:wan": "node --env-file=.env.local scripts/test-wan.mjs"
+  }
+}
