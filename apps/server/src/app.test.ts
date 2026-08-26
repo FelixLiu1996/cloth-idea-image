@@ -113,6 +113,7 @@ class FakeAnalyzer implements GarmentAnalysisProvider {
     model: this.model,
     providerRequestId: "analysis-request-1",
     durationMs: 2_500,
+    attemptCount: 1,
     analysis,
     usage: {
       generatedImages: 0,

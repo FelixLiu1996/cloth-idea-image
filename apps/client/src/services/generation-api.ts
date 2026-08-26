@@ -7,6 +7,8 @@ import type {
 } from "@cloth-idea/domain";
 import Taro from "@tarojs/taro";
 
+const MODEL_REQUEST_TIMEOUT_MS = 180_000;
+
 export interface CreateGenerationRequest {
   readonly imagePath: string;
   readonly mode: GenerationMode;
@@ -53,6 +55,8 @@ async function uploadGarmentRequest<TResponse>(
     url: `${API_BASE_URL}${path}`,
     filePath: input.imagePath,
     name: "sourceImage",
+    withCredentials: false,
+    timeout: MODEL_REQUEST_TIMEOUT_MS,
     header: {
       "Idempotency-Key": createIdempotencyKey(),
     },

@@ -18,7 +18,7 @@ export class UnconfiguredGarmentAnalysisProvider implements GarmentAnalysisProvi
   readonly model: string;
   readonly configured = false;
 
-  constructor(model = "qwen3-vl-plus") {
+  constructor(model = "qwen3.7-plus") {
     this.model = model;
   }
 

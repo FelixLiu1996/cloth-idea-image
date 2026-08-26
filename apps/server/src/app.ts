@@ -256,6 +256,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
             providerRequestId: providerResult.providerRequestId,
             schemaVersion: providerResult.analysis.schemaVersion,
             durationMs: providerResult.durationMs,
+            attemptCount: providerResult.attemptCount,
+            usage: providerResult.usage,
           },
           "garment analysis completed",
         );
@@ -352,6 +354,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
           strategy: result.strategy,
           directionId: result.directionId,
           durationMs: providerResult.durationMs,
+          usage: providerResult.usage,
           status: result.status,
         },
         "generation completed",
@@ -409,7 +412,17 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       requestId: request.id,
       retryable,
     };
-    request.log.warn({ code, statusCode, retryable }, "API request failed");
+    const providerValidationIssues =
+      error instanceof GarmentProviderError && error.cause instanceof z.ZodError
+        ? error.cause.issues.map((issue) => ({
+            code: issue.code,
+            path: issue.path.join("."),
+          }))
+        : undefined;
+    request.log.warn(
+      { code, statusCode, retryable, providerValidationIssues },
+      "API request failed",
+    );
     return reply.code(statusCode).send(response);
   });
 

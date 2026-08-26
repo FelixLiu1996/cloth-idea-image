@@ -28,6 +28,7 @@ Taro 客户端
 Model Provider 层
 ├── Alibaba Qwen VL Analysis Provider
 ├── Alibaba Wan Provider
+├── Alibaba Qwen Image Provider
 └── Volcengine Seedream Provider
 ```
 

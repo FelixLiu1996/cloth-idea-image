@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 
 import {
   AlibabaQwenProvider,
+  AlibabaQwenImageProvider,
   AlibabaWanProvider,
   type GarmentAnalysisProvider,
   type GarmentImageProvider,
@@ -43,16 +44,26 @@ export function createGarmentProvider(
   environment: NodeJS.ProcessEnv = process.env,
 ): GarmentImageProvider {
   const providerName = environment.MODEL_PROVIDER ?? "alibaba-wan";
-  if (providerName !== "alibaba-wan") {
+  if (providerName !== "alibaba-wan" && providerName !== "alibaba-qwen-image") {
     throw new Error(`不支持的 MODEL_PROVIDER：${providerName}`);
   }
 
-  const model = environment.DASHSCOPE_IMAGE_MODEL ?? "wan2.7-image-pro";
+  const model =
+    environment.DASHSCOPE_IMAGE_MODEL ??
+    (providerName === "alibaba-qwen-image" ? "qwen-image-2.0-pro-2026-06-22" : "wan2.7-image-pro");
   const apiKey = environment.DASHSCOPE_API_KEY;
   const baseUrl = environment.DASHSCOPE_API_BASE_URL;
 
   if (!apiKey || !baseUrl) {
-    return new UnconfiguredGarmentImageProvider(model);
+    return new UnconfiguredGarmentImageProvider(model, providerName);
+  }
+
+  if (providerName === "alibaba-qwen-image") {
+    return new AlibabaQwenImageProvider({
+      apiKey,
+      baseUrl,
+      model,
+    });
   }
 
   return new AlibabaWanProvider({
@@ -65,7 +76,7 @@ export function createGarmentProvider(
 export function createGarmentAnalyzer(
   environment: NodeJS.ProcessEnv = process.env,
 ): GarmentAnalysisProvider {
-  const model = environment.DASHSCOPE_VISION_MODEL ?? "qwen3-vl-plus";
+  const model = environment.DASHSCOPE_VISION_MODEL ?? "qwen3.7-plus";
   const apiKey = environment.DASHSCOPE_API_KEY;
   const baseUrl =
     environment.DASHSCOPE_COMPATIBLE_BASE_URL ??

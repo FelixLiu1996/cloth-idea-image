@@ -27,8 +27,8 @@
   "analysisId": "uuid",
   "status": "succeeded",
   "provider": "alibaba-qwen-vl",
-  "model": "qwen3-vl-plus",
-  "durationMs": 56000,
+  "model": "qwen3.7-plus",
+  "durationMs": 42000,
   "evidenceSummary": {
     "accepted": 11,
     "needsReview": 3,
@@ -76,6 +76,8 @@
 ```
 
 同时提供 `analysisId` 和 `directionId` 时使用 `garment-analysis-v1` 确定性编译提示词。两者都不提供时使用 `garment-redesign-v1` 直接生成，响应的 `strategy` 为 `direct`，方向字段为 `null`。只提供其中一个会返回 `INVALID_GENERATION_REQUEST`。
+
+服务端默认生图 Provider 为 `alibaba-wan`；测试时可通过服务端配置切换为 `alibaba-qwen-image`，API 响应结构保持不变。客户端不得直接指定模型或 Provider。
 
 ## 读取结果图
 
