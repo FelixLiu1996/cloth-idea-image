@@ -98,9 +98,9 @@
 }
 ```
 
-`instruction` 为2至500字符。服务端读取父结果图作为本轮编辑底图，以父任务保存的基础 Prompt 为起点，使用 `garment-iteration-v1` 确定性追加累计修改要求，并把本轮指令放在提示词前部。第一次修改只使用父结果；第二次及后续修改还会把本分支首次生成结果作为稳定基准图，帮助约束白平衡、面料颜色、纹理和未修改结构。原始保留项、证据门事实、选中方向和禁止项继续生效。单条父子分支最多连续修改5次，超过时返回 `REFINEMENT_LIMIT_REACHED`，避免提示词和付费调用无边界增长。
+`instruction` 为2至500字符。服务端先确认父结果仍然存在，再读取本分支首次成功结果作为稳定生成底图；以父任务保存的基础 Prompt 为起点，使用 `garment-iteration-v1` 确定性累计全部修改要求，并把本轮指令放在提示词前部。每轮都从稳定首版一次性重算全部累计修改，不把上一轮模型输出继续作为像素编辑输入，从而减少多代生成图的锐化、颗粒和偏色累积。原始保留项、证据门事实、选中方向和禁止项继续生效。单条父子分支最多连续修改5次，超过时返回 `REFINEMENT_LIMIT_REACHED`，避免提示词和付费调用无边界增长。
 
-成功响应仍为 `GenerationApiResponse`，其中 `operation` 为 `refine`，`parentJobId` 指向被修改的结果，`revisionInstruction` 为本轮指令。父记录不存在时返回 `PARENT_GENERATION_NOT_FOUND`；父图片已经清理时返回 `PARENT_ASSET_EXPIRED`；稳定基准记录或图片已清理时返回 `ITERATION_ANCHOR_EXPIRED`，不会在缺少画质锚点时静默继续多代编辑。
+成功响应仍为 `GenerationApiResponse`，其中 `operation` 为 `refine`，`parentJobId` 指向用户继续修改时看到的上一版，`revisionInstruction` 为本轮指令。父记录不存在时返回 `PARENT_GENERATION_NOT_FOUND`；父图片已经清理时返回 `PARENT_ASSET_EXPIRED`；稳定基准记录或图片已清理时返回 `ITERATION_ANCHOR_EXPIRED`，不会在缺少稳定生成底图时静默继续。
 
 ## 读取结果图
 

@@ -207,7 +207,6 @@ function createRequestFingerprint(value: object): string {
 
 interface RunGenerationOptions {
   readonly sourceImage: SourceImageInput;
-  readonly referenceImages?: readonly SourceImageInput[];
   readonly prompt: string;
   readonly promptVersion: GenerationPromptVersion;
   readonly summary: string;
@@ -237,7 +236,6 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   ): Promise<GenerationApiResponse> {
     const providerResult = await options.provider.generateVariation({
       sourceImage: input.sourceImage,
-      ...(input.referenceImages ? { referenceImages: input.referenceImages } : {}),
       prompt: input.prompt,
       outputCount: 1,
       promptVersion: input.promptVersion,
@@ -282,6 +280,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
         jobId,
         parentJobId: input.parentJobId,
         operation: input.operation,
+        sourceStrategy: input.iterationAnchorJobId ? "stable-anchor-rebase" : "uploaded-image",
+        iterationAnchorJobId: input.iterationAnchorJobId ?? jobId,
         provider: providerResult.provider,
         model: providerResult.model,
         providerRequestId: providerResult.providerRequestId,
@@ -513,14 +513,14 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
           "当前分支的稳定基准图已过期，无法安全地继续修改。",
         );
       }
-      const needsStableAnchor = stableAnchorRecord.response.jobId !== parent.response.jobId;
-      const stableAnchorAsset = needsStableAnchor
-        ? await assetStore.readResult(
-            stableAnchorRecord.response.jobId,
-            stableAnchorRecord.assetFileName,
-          )
-        : null;
-      if (needsStableAnchor && !stableAnchorAsset) {
+      const stableAnchorAsset =
+        stableAnchorRecord.response.jobId === parent.response.jobId
+          ? parentAsset
+          : await assetStore.readResult(
+              stableAnchorRecord.response.jobId,
+              stableAnchorRecord.assetFileName,
+            );
+      if (!stableAnchorAsset) {
         throw new RequestError(
           410,
           "ITERATION_ANCHOR_EXPIRED",
@@ -532,12 +532,12 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       const prompt = compileGarmentIterationPrompt({
         basePrompt: parent.basePrompt,
         revisionInstructions,
-        hasStableAnchorImage: stableAnchorAsset !== null,
+        usesStableAnchorImage: true,
       });
       const sourceImage: SourceImageInput = {
-        bytes: parentAsset.bytes,
-        fileName: parent.assetFileName,
-        mimeType: parent.assetMimeType,
+        bytes: stableAnchorAsset.bytes,
+        fileName: stableAnchorRecord.assetFileName,
+        mimeType: stableAnchorAsset.mimeType,
       };
       const requestFingerprint = createRequestFingerprint({
         type: "refinement",
@@ -550,17 +550,6 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
         () =>
           runGeneration(request, {
             sourceImage,
-            ...(stableAnchorAsset
-              ? {
-                  referenceImages: [
-                    {
-                      bytes: stableAnchorAsset.bytes,
-                      fileName: stableAnchorRecord.assetFileName,
-                      mimeType: stableAnchorAsset.mimeType,
-                    },
-                  ],
-                }
-              : {}),
             prompt,
             promptVersion: "garment-iteration-v1",
             summary: `${parent.baseSummary} · 继续修改：${parsedBody.data.instruction}`,

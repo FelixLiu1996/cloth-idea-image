@@ -126,15 +126,15 @@ describe("compileAnalyzedGarmentPrompt", () => {
     );
   });
 
-  it("describes the stable anchor and previous result roles for repeated edits", () => {
+  it("rebases cumulative edits onto the stable branch image", () => {
     const prompt = compileGarmentIterationPrompt({
       basePrompt: "必须完整保留：白色绗缝。",
       revisionInstructions: ["袖口增加收束", "增加一个斜向拉链袋"],
-      hasStableAnchorImage: true,
+      usesStableAnchorImage: true,
     });
 
-    expect(prompt).toContain("图一是本分支首次生成的稳定基准版");
-    expect(prompt).toContain("图二是需要继续修改的上一版");
-    expect(prompt).toContain("必须以图二为编辑底图");
+    expect(prompt).toContain("当前输入图片是本分支首次生成的稳定基准版");
+    expect(prompt).toContain("一次生成中完整执行下面所有累计修改");
+    expect(prompt).toContain("不得只执行最后一条");
   });
 });

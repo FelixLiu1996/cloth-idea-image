@@ -63,7 +63,7 @@ export interface CompileAnalyzedPromptInput {
 export interface CompileGarmentIterationPromptInput {
   readonly basePrompt: string;
   readonly revisionInstructions: readonly string[];
-  readonly hasStableAnchorImage?: boolean;
+  readonly usesStableAnchorImage?: boolean;
 }
 
 export function compileAnalyzedGarmentPrompt(input: CompileAnalyzedPromptInput): string {
@@ -120,18 +120,19 @@ export function compileGarmentIterationPrompt(input: CompileGarmentIterationProm
   }
 
   const latestInstruction = revisionInstructions.at(-1);
-  const imageRoles = input.hasStableAnchorImage
-    ? "本次同时提供两张参考图：图一是本分支首次生成的稳定基准版，图二是需要继续修改的上一版。必须以图二为编辑底图；图一只用于校准白平衡、原始面料颜色、纹理和未修改结构，不得把已经完成的设计倒退回图一。"
+  const sourceContext = input.usesStableAnchorImage
+    ? "当前输入图片是本分支首次生成的稳定基准版，不是新的原款，也不是上一轮可能已经退化的结果。请从这张稳定基准版出发，在一次生成中完整执行下面所有累计修改；不得只执行最后一条。"
     : "当前输入图片是需要继续修改的上一版结果，不是新的原款。";
+  const preservationTarget = input.usesStableAnchorImage ? "稳定基准版" : "上一版";
 
   return [
-    `这是局部编辑任务。本轮重点：${latestInstruction}。只修改与本轮要求直接相关的区域；没有被要求改变的结构、面料、颜色、白平衡、构图和已完成设计必须保持上一版。`,
-    imageRoles,
+    `这是局部编辑任务。本轮重点：${latestInstruction}。只修改累计指令直接涉及的区域；没有被要求改变的结构、面料、颜色、白平衡和构图必须保持${preservationTarget}，各条累计修改不得互相覆盖。`,
+    sourceContext,
     `累计追加修改（按顺序全部执行）：\n${revisionInstructions
       .map((instruction, index) => `${index + 1}. ${instruction}`)
       .join("\n")}`,
     "追加修改的优先级低于必须保留项和结构硬约束。若追加要求与硬约束冲突，以硬约束为准，不得为了执行局部修改破坏服装的可生产性。",
-    "以下是原始任务约束，只用于继续校验硬约束和禁止项，不代表要把上一版恢复成原图：",
+    "以下是原始任务约束，只用于继续校验硬约束和禁止项，不代表要恢复成最初上传的原图：",
     input.basePrompt.trim(),
   ].join("\n\n");
 }

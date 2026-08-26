@@ -22,15 +22,17 @@ class FakeProvider implements GarmentImageProvider {
   readonly provider = "alibaba-wan" as const;
   readonly model = "fake-wan";
   readonly configured = true;
+  private outputIndex = 0;
   readonly generateVariation = vi.fn(
     async (input: GarmentImageProviderInput): Promise<GarmentGenerationResult> => {
       void input;
+      this.outputIndex += 1;
       return {
         provider: this.provider,
         model: this.model,
         providerRequestId: "provider-request-1",
         durationMs: 1_250,
-        assets: [{ bytes: pngBytes, mimeType: "image/png" }],
+        assets: [{ bytes: new Uint8Array([...pngBytes, this.outputIndex]), mimeType: "image/png" }],
         usage: {
           generatedImages: 1,
           inputTokens: null,
@@ -227,7 +229,7 @@ describe("generation API", () => {
       });
       expect(assetResponse.statusCode).toBe(200);
       expect(assetResponse.headers["content-type"]).toContain("image/png");
-      expect(assetResponse.rawPayload).toEqual(Buffer.from(pngBytes));
+      expect(assetResponse.rawPayload).toEqual(Buffer.from([...pngBytes, 1]));
 
       const repeatedResponse = await context.app.inject({
         method: "POST",
@@ -373,9 +375,10 @@ describe("generation API", () => {
         lastRefined = nextRefinementResponse.json<GenerationApiResponse>();
         if (index === 2) {
           const repeatedEditProviderInput = context.provider.generateVariation.mock.calls[3]?.[0];
-          expect(repeatedEditProviderInput?.referenceImages).toHaveLength(1);
-          expect(repeatedEditProviderInput?.prompt).toContain("图一是本分支首次生成的稳定基准版");
-          expect(repeatedEditProviderInput?.prompt).toContain("必须以图二为编辑底图");
+          expect(repeatedEditProviderInput?.referenceImages).toBeUndefined();
+          expect(repeatedEditProviderInput?.sourceImage.bytes.at(-1)).toBe(2);
+          expect(repeatedEditProviderInput?.prompt).toContain("本分支首次生成的稳定基准版");
+          expect(repeatedEditProviderInput?.prompt).toContain("不得只执行最后一条");
         }
       }
 
