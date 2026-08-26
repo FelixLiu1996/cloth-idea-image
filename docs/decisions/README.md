@@ -9,6 +9,8 @@
 - `Superseded`：已被新的 ADR 替代。
 - `Deprecated`：不再建议，但可能仍存在于代码中。
 
+ADR 的状态表示决策状态，不是功能完成状态。`Accepted` 只代表采用该方向；实际是否已经实现必须查看 [当前状态](../current-status.md)。
+
 ## 编写规则
 
 - 文件名使用四位编号和简短名称，例如 `0004-use-object-storage.md`。

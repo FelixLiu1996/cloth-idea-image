@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+### Changed
+
+- 澄清目标需求、目标架构、当前实现和上线前硬门槛的区别，增加实施状态矩阵，避免将下载、历史、异步任务和删除能力误认为已经完成。
+
 ### Added
 
 - 增加 npm workspace、共享严格 TypeScript 配置、ESLint、Prettier、Vitest 和统一检查命令。
