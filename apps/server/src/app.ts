@@ -1,10 +1,11 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import cors from "@fastify/cors";
 import multipart, { type MultipartFile } from "@fastify/multipart";
 import {
   buildGarmentPrompt,
   compileAnalyzedGarmentPrompt,
+  compileGarmentIterationPrompt,
   createGenerationSummary,
   designIntensities,
   findDesignDirection,
@@ -14,6 +15,8 @@ import {
   type GarmentAnalysisBrief,
   type GarmentGenerationInput,
   type GenerationApiResponse,
+  type GenerationOperation,
+  type GenerationPromptVersion,
   type SourceImageInput,
   type SupportedImageMimeType,
 } from "@cloth-idea/domain";
@@ -30,7 +33,7 @@ import { z } from "zod";
 import { LocalAssetStore } from "./asset-store";
 import type { ServerConfig } from "./config";
 import { GarmentAnalysisRepository } from "./garment-analysis-repository";
-import { GenerationResultRepository } from "./generation-repository";
+import { GenerationResultRepository, IdempotencyKeyConflictError } from "./generation-repository";
 
 const generationFieldsSchema = z.object({
   mode: z.enum(generationModes),
@@ -56,6 +59,7 @@ const createGenerationFieldsSchema = generationFieldsSchema
       .string()
       .regex(/^direction-[1-3]$/)
       .optional(),
+    parentJobId: z.string().uuid().optional(),
   })
   .superRefine((fields, context) => {
     if ((fields.analysisId === undefined) !== (fields.directionId === undefined)) {
@@ -66,6 +70,11 @@ const createGenerationFieldsSchema = generationFieldsSchema
       });
     }
   });
+
+const refinementFieldsSchema = z.object({
+  instruction: z.string().trim().min(2, "请填写需要继续修改的内容。").max(500),
+});
+const maxRefinementDepth = 5;
 
 interface BuildAppOptions {
   readonly config: ServerConfig;
@@ -188,12 +197,101 @@ function readIdempotencyKey(request: FastifyRequest): string | undefined {
   return Array.isArray(header) ? header[0] : header;
 }
 
+function sha256(value: Uint8Array | string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function createRequestFingerprint(value: object): string {
+  return sha256(JSON.stringify(value));
+}
+
+interface RunGenerationOptions {
+  readonly sourceImage: SourceImageInput;
+  readonly prompt: string;
+  readonly promptVersion: GenerationPromptVersion;
+  readonly summary: string;
+  readonly basePrompt: string;
+  readonly baseSummary: string;
+  readonly baseRequestFingerprint: string;
+  readonly revisionInstructions: readonly string[];
+  readonly strategy: GenerationApiResponse["strategy"];
+  readonly directionId: string | null;
+  readonly directionName: string | null;
+  readonly operation: GenerationOperation;
+  readonly parentJobId: string | null;
+  readonly revisionInstruction: string | null;
+}
+
 export async function buildApp(options: BuildAppOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: options.logger ?? false });
   const assetStore = options.assetStore ?? new LocalAssetStore(options.config.assetDirectory);
   const repository = options.repository ?? new GenerationResultRepository();
   const analysisRepository = options.analysisRepository ?? new GarmentAnalysisRepository();
   const analyzer = options.analyzer ?? new UnconfiguredGarmentAnalysisProvider();
+
+  async function runGeneration(
+    request: FastifyRequest,
+    input: RunGenerationOptions,
+  ): Promise<GenerationApiResponse> {
+    const providerResult = await options.provider.generateVariation({
+      sourceImage: input.sourceImage,
+      prompt: input.prompt,
+      outputCount: 1,
+      promptVersion: input.promptVersion,
+    });
+    const firstAsset = providerResult.assets[0];
+    if (!firstAsset) {
+      throw new GarmentProviderError("PROVIDER_BAD_RESPONSE", "生图结果中没有图片。");
+    }
+
+    const jobId = randomUUID();
+    const storedAsset = await assetStore.saveResult(jobId, firstAsset);
+    const result: GenerationApiResponse = {
+      jobId,
+      status: "succeeded",
+      provider: providerResult.provider,
+      model: providerResult.model,
+      resultUrl: `${options.config.publicBaseUrl}/api/v1/assets/${jobId}/${storedAsset.fileName}`,
+      summary: input.summary,
+      durationMs: providerResult.durationMs,
+      strategy: input.strategy,
+      directionId: input.directionId,
+      directionName: input.directionName,
+      operation: input.operation,
+      parentJobId: input.parentJobId,
+      revisionInstruction: input.revisionInstruction,
+      createdAt: new Date().toISOString(),
+    };
+
+    repository.save({
+      response: result,
+      assetFileName: storedAsset.fileName,
+      assetMimeType: storedAsset.mimeType,
+      basePrompt: input.basePrompt,
+      baseSummary: input.baseSummary,
+      baseRequestFingerprint: input.baseRequestFingerprint,
+      revisionInstructions: input.revisionInstructions,
+    });
+
+    request.log.info(
+      {
+        jobId,
+        parentJobId: input.parentJobId,
+        operation: input.operation,
+        provider: providerResult.provider,
+        model: providerResult.model,
+        providerRequestId: providerResult.providerRequestId,
+        promptVersion: input.promptVersion,
+        strategy: result.strategy,
+        directionId: result.directionId,
+        durationMs: providerResult.durationMs,
+        usage: providerResult.usage,
+        status: result.status,
+      },
+      "generation completed",
+    );
+    return result;
+  }
 
   await app.register(cors, {
     origin: options.config.clientOrigin === "*" ? true : options.config.clientOrigin,
@@ -225,6 +323,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     outputCount: 1,
     analysisEnabled: analyzer.configured,
     analysisSchemaVersion: "garment-dna-v0.2",
+    resultIterationEnabled: true,
+    maxRefinementDepth,
   }));
 
   app.post("/api/v1/analyses", async (request, reply) => {
@@ -279,7 +379,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       );
     }
 
-    const { analysisId, directionId, ...generationFields } = parsedFields.data;
+    const { analysisId, directionId, parentJobId, ...generationFields } = parsedFields.data;
     const analyzed = analysisId !== undefined && directionId !== undefined;
     const input: GarmentGenerationInput = {
       ...generationFields,
@@ -316,57 +416,134 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       prompt = buildGarmentPrompt(input);
     }
 
-    const execution = await repository.executeOnce(readIdempotencyKey(request), async () => {
-      const providerResult = await options.provider.generateVariation({
-        sourceImage,
-        prompt,
-        outputCount: 1,
-        promptVersion: input.promptVersion,
-      });
-      const firstAsset = providerResult.assets[0];
-      if (!firstAsset) {
-        throw new GarmentProviderError("PROVIDER_BAD_RESPONSE", "生图结果中没有图片。");
-      }
-
-      const jobId = randomUUID();
-      const storedAsset = await assetStore.saveResult(jobId, firstAsset);
-      const baseSummary = createGenerationSummary(input);
-      const result: GenerationApiResponse = {
-        jobId,
-        status: "succeeded",
-        provider: providerResult.provider,
-        model: providerResult.model,
-        resultUrl: `${options.config.publicBaseUrl}/api/v1/assets/${jobId}/${storedAsset.fileName}`,
-        summary: directionName ? `${baseSummary} · ${directionName}` : baseSummary,
-        durationMs: providerResult.durationMs,
-        strategy: analyzed ? "analyzed" : "direct",
-        directionId: directionId ?? null,
-        directionName,
-      };
-
-      request.log.info(
-        {
-          jobId,
-          provider: providerResult.provider,
-          model: providerResult.model,
-          providerRequestId: providerResult.providerRequestId,
-          promptVersion: input.promptVersion,
-          strategy: result.strategy,
-          directionId: result.directionId,
-          durationMs: providerResult.durationMs,
-          usage: providerResult.usage,
-          status: result.status,
-        },
-        "generation completed",
-      );
-      return result;
+    const baseSummary = createGenerationSummary(input);
+    const resultSummary = directionName ? `${baseSummary} · ${directionName}` : baseSummary;
+    const baseRequestFingerprint = createRequestFingerprint({
+      type: "generation-base",
+      sourceImageSha256: sha256(sourceImage.bytes),
+      generationFields,
+      analysisId: analysisId ?? null,
+      directionId: directionId ?? null,
     });
+    let operation: GenerationOperation = "initial";
+    if (parentJobId) {
+      const parent = repository.get(parentJobId);
+      if (!parent) {
+        throw new RequestError(404, "PARENT_GENERATION_NOT_FOUND", "上一张生成结果不存在。");
+      }
+      if (parent.baseRequestFingerprint !== baseRequestFingerprint) {
+        throw new RequestError(
+          409,
+          "PARENT_GENERATION_MISMATCH",
+          "上一张结果与当前原图或设计方向不一致，无法作为重新生成的父任务。",
+        );
+      }
+      operation = "regenerate";
+    }
+
+    const execution = await repository.executeOnce(
+      readIdempotencyKey(request),
+      createRequestFingerprint({
+        type: "generation",
+        baseRequestFingerprint,
+        parentJobId: parentJobId ?? null,
+      }),
+      () =>
+        runGeneration(request, {
+          sourceImage,
+          prompt,
+          promptVersion: input.promptVersion,
+          summary: resultSummary,
+          basePrompt: prompt,
+          baseSummary: resultSummary,
+          baseRequestFingerprint,
+          revisionInstructions: [],
+          strategy: analyzed ? "analyzed" : "direct",
+          directionId: directionId ?? null,
+          directionName,
+          operation,
+          parentJobId: parentJobId ?? null,
+          revisionInstruction: null,
+        }),
+    );
 
     if (execution.reused) {
       request.log.info({ jobId: execution.result.jobId }, "idempotent generation result reused");
     }
     return reply.code(execution.reused ? 200 : 201).send(execution.result);
   });
+
+  app.post<{ Params: { jobId: string }; Body: unknown }>(
+    "/api/v1/generations/:jobId/refinements",
+    async (request, reply) => {
+      const parsedBody = refinementFieldsSchema.safeParse(request.body);
+      if (!parsedBody.success) {
+        throw new RequestError(
+          400,
+          "INVALID_REFINEMENT_REQUEST",
+          parsedBody.error.issues[0]?.message ?? "继续修改参数不完整。",
+        );
+      }
+
+      const parent = repository.get(request.params.jobId);
+      if (!parent) {
+        throw new RequestError(404, "PARENT_GENERATION_NOT_FOUND", "上一张生成结果不存在。");
+      }
+      if (parent.revisionInstructions.length >= maxRefinementDepth) {
+        throw new RequestError(
+          409,
+          "REFINEMENT_LIMIT_REACHED",
+          `当前分支最多连续修改 ${maxRefinementDepth} 次，请从原图或其他方向重新生成。`,
+        );
+      }
+      const parentAsset = await assetStore.readResult(parent.response.jobId, parent.assetFileName);
+      if (!parentAsset) {
+        throw new RequestError(410, "PARENT_ASSET_EXPIRED", "上一张结果图片已过期，无法继续修改。");
+      }
+
+      const revisionInstructions = [...parent.revisionInstructions, parsedBody.data.instruction];
+      const prompt = compileGarmentIterationPrompt({
+        basePrompt: parent.basePrompt,
+        revisionInstructions,
+      });
+      const sourceImage: SourceImageInput = {
+        bytes: parentAsset.bytes,
+        fileName: parent.assetFileName,
+        mimeType: parent.assetMimeType,
+      };
+      const requestFingerprint = createRequestFingerprint({
+        type: "refinement",
+        parentJobId: parent.response.jobId,
+        instruction: parsedBody.data.instruction,
+      });
+      const execution = await repository.executeOnce(
+        readIdempotencyKey(request),
+        requestFingerprint,
+        () =>
+          runGeneration(request, {
+            sourceImage,
+            prompt,
+            promptVersion: "garment-iteration-v1",
+            summary: `${parent.baseSummary} · 继续修改：${parsedBody.data.instruction}`,
+            basePrompt: parent.basePrompt,
+            baseSummary: parent.baseSummary,
+            baseRequestFingerprint: parent.baseRequestFingerprint,
+            revisionInstructions,
+            strategy: parent.response.strategy,
+            directionId: parent.response.directionId,
+            directionName: parent.response.directionName,
+            operation: "refine",
+            parentJobId: parent.response.jobId,
+            revisionInstruction: parsedBody.data.instruction,
+          }),
+      );
+
+      if (execution.reused) {
+        request.log.info({ jobId: execution.result.jobId }, "idempotent refinement result reused");
+      }
+      return reply.code(execution.reused ? 200 : 201).send(execution.result);
+    },
+  );
 
   app.get<{ Params: { jobId: string; fileName: string } }>(
     "/api/v1/assets/:jobId/:fileName",
@@ -394,6 +571,11 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       code = error.code;
       message = error.message;
       retryable = error.retryable;
+    } else if (error instanceof IdempotencyKeyConflictError) {
+      statusCode = 409;
+      code = "IDEMPOTENCY_KEY_REUSED";
+      message = error.message;
+      retryable = false;
     } else if (error instanceof GarmentProviderError) {
       statusCode = providerStatus(error.code);
       code = error.code;

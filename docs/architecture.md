@@ -60,12 +60,14 @@ scripts/
 - 表单输入与校验。
 - 同步分析/生成的加载、失败和结果状态。
 - 三个设计方向、生产风险和选中状态展示。
+- 原图/上一版与当前结果对比、本次页面会话历史、同方向再生成和继续修改。
+- 通过 Taro 平台适配层下载结果图。
 
 目标客户端还应负责：
 
 - 异步任务状态展示和轮询。
 - 当前设备的匿名会话标识和近期任务。
-- 下载、保存和平台分享入口。
+- 平台分享入口。
 
 客户端不得：
 
@@ -74,7 +76,7 @@ scripts/
 - 将完整图片 Base64 写入本地日志或持久缓存。
 - 在共享业务代码中直接调用浏览器或微信专属 API。
 
-目标平台能力使用统一适配接口。当前只实现图片选择适配；保存、分享和会话接口尚未实现。完整接口草案例如：
+目标平台能力使用统一适配接口。当前已实现图片选择和结果保存适配；分享和会话接口尚未实现。完整接口草案例如：
 
 ```ts
 interface PlatformAdapter {
@@ -94,6 +96,7 @@ interface PlatformAdapter {
 - 调用分析和生图 Model Provider。
 - 控制超时和进程内幂等，不自动重复付费调用。
 - 下载厂商临时结果并转存本地 `var/assets/`。
+- 保存进程内父子生成关系，并支持以上一版结果为参考图继续修改。
 - 返回稳定的业务错误码。
 
 目标服务端还应负责：
@@ -109,7 +112,7 @@ interface PlatformAdapter {
 
 ```ts
 interface GarmentImageProvider {
-  readonly provider: "alibaba-wan" | "volcengine-seedream";
+  readonly provider: "alibaba-wan" | "alibaba-qwen-image" | "volcengine-seedream";
   readonly model: string;
   readonly configured: boolean;
 
@@ -154,6 +157,12 @@ POST /api/v1/generations multipart + analysisId + directionId
   → 下载厂商临时结果
   → var/assets/{jobId}/result.{ext}
   → 返回稳定 GenerationApiResponse
+
+POST /api/v1/generations/{jobId}/refinements JSON
+  → 读取父结果图和原始基础 Prompt
+  → 确定性追加累计修改指令
+  → 使用 garment-iteration-v1 调用当前生图 Provider
+  → 保存新结果及 parentJobId
 ```
 
 - 分析和生成的任务与幂等结果保存在服务进程内。
@@ -161,6 +170,9 @@ POST /api/v1/generations multipart + analysisId + directionId
 - 原图只在当前请求内存中传递，不在本地持久化。
 - 分析记录只保存原图不可逆 SHA-256，不保存原图 Base64 或文件。
 - `Idempotency-Key` 分别防止分析和生图重复计费。
+- 生成幂等记录同时保存请求指纹；同一幂等键用于不同请求时返回冲突，不复用错误结果。
+- 同方向再生成仍上传并使用原图；继续修改使用父结果图，同时继承原始保留项、证据门结果和选中方向。
+- 结果父子关系与基础 Prompt 仅保存在服务进程内；客户端历史仅保存在当前页面状态中。
 - 不提供 `analysisId` 与 `directionId` 时仍走 `garment-redesign-v1` 直接生成，用于降级和 A/B 对照。
 - 当前实现只用于本地开发和真实效果验证，不用于公开部署。
 

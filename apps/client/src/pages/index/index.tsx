@@ -6,12 +6,17 @@ import type {
 } from "@cloth-idea/domain";
 import { Button, Image, Text, Textarea, View } from "@tarojs/components";
 import Taro from "@tarojs/taro";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
-import { selectGarmentImage, type SelectedImage } from "../../platform/image-platform";
+import {
+  saveGeneratedImage,
+  selectGarmentImage,
+  type SelectedImage,
+} from "../../platform/image-platform";
 import {
   analyzeGarment,
   createGeneration,
+  refineGeneration,
   type CreateGenerationRequest,
 } from "../../services/generation-api";
 import "./index.scss";
@@ -48,7 +53,28 @@ const riskLabels = {
   high: "高生产风险",
 } as const;
 
+const operationLabels = {
+  initial: "首次生成",
+  regenerate: "同方向再生成",
+  refine: "继续修改",
+} as const;
+
+function latestMatchingResult(
+  results: readonly GenerationApiResponse[],
+  strategy: GenerationApiResponse["strategy"],
+  directionId: string | null,
+): GenerationApiResponse | null {
+  for (let index = results.length - 1; index >= 0; index -= 1) {
+    const item = results[index];
+    if (item?.strategy === strategy && item.directionId === directionId) {
+      return item;
+    }
+  }
+  return null;
+}
+
 export default function Index() {
+  const modelRequestInFlight = useRef(false);
   const [mode, setMode] = useState<GenerationMode>("quick-derivative");
   const [image, setImage] = useState<SelectedImage | null>(null);
   const [preserveItems, setPreserveItems] = useState("");
@@ -57,12 +83,16 @@ export default function Index() {
   const [intensity, setIntensity] = useState<DesignIntensity>("medium");
   const [analyzing, setAnalyzing] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [refining, setRefining] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [analysisResult, setAnalysisResult] = useState<GarmentAnalysisApiResponse | null>(null);
   const [selectedDirectionId, setSelectedDirectionId] = useState<string | null>(null);
-  const [result, setResult] = useState<GenerationApiResponse | null>(null);
+  const [results, setResults] = useState<GenerationApiResponse[]>([]);
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [revisionInstruction, setRevisionInstruction] = useState("");
 
-  const busy = analyzing || generating;
+  const busy = analyzing || generating || refining;
   const canRequest = useMemo(
     () =>
       image !== null &&
@@ -72,11 +102,33 @@ export default function Index() {
     [busy, changeRequest, image, styleDirection],
   );
   const canGenerateAnalyzed = canRequest && analysisResult !== null && selectedDirectionId !== null;
+  const activeResult = useMemo(
+    () => results.find((item) => item.jobId === activeJobId) ?? null,
+    [activeJobId, results],
+  );
+  const parentResult = useMemo(
+    () =>
+      activeResult?.parentJobId
+        ? (results.find((item) => item.jobId === activeResult.parentJobId) ?? null)
+        : null,
+    [activeResult, results],
+  );
+  const latestSelectedDirectionResult = useMemo(
+    () =>
+      selectedDirectionId ? latestMatchingResult(results, "analyzed", selectedDirectionId) : null,
+    [results, selectedDirectionId],
+  );
+  const latestDirectResult = useMemo(
+    () => latestMatchingResult(results, "direct", null),
+    [results],
+  );
 
   function clearDerivedState() {
     setAnalysisResult(null);
     setSelectedDirectionId(null);
-    setResult(null);
+    setResults([]);
+    setActiveJobId(null);
+    setRevisionInstruction("");
     setErrorMessage("");
   }
 
@@ -95,6 +147,9 @@ export default function Index() {
   }
 
   async function chooseImage() {
+    if (busy || modelRequestInFlight.current) {
+      return;
+    }
     const selected = await selectGarmentImage();
     if (selected) {
       if (selected.size > 10 * 1024 * 1024) {
@@ -108,15 +163,18 @@ export default function Index() {
 
   async function analyze() {
     const input = requestInput();
-    if (!canRequest || !input) {
+    if (!canRequest || !input || modelRequestInFlight.current) {
       return;
     }
 
+    modelRequestInFlight.current = true;
     setAnalyzing(true);
     setErrorMessage("");
     setAnalysisResult(null);
     setSelectedDirectionId(null);
-    setResult(null);
+    setResults([]);
+    setActiveJobId(null);
+    setRevisionInstruction("");
     try {
       const nextAnalysis = await analyzeGarment(input);
       setAnalysisResult(nextAnalysis);
@@ -124,34 +182,95 @@ export default function Index() {
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "分析失败，请稍后重试。");
     } finally {
+      modelRequestInFlight.current = false;
       setAnalyzing(false);
     }
   }
 
-  async function generate(useAnalysis: boolean) {
+  async function generate(useAnalysis: boolean, parentOverride?: GenerationApiResponse | null) {
     const input = requestInput();
-    if (!canRequest || !input) {
+    if (!canRequest || !input || modelRequestInFlight.current) {
       return;
     }
     if (useAnalysis && (!analysisResult || !selectedDirectionId)) {
       return;
     }
 
+    modelRequestInFlight.current = true;
     setGenerating(true);
     setErrorMessage("");
-    setResult(null);
     try {
+      const parent =
+        parentOverride === undefined
+          ? useAnalysis
+            ? latestMatchingResult(results, "analyzed", selectedDirectionId)
+            : latestMatchingResult(results, "direct", null)
+          : parentOverride;
       const nextResult = await createGeneration({
         ...input,
         ...(useAnalysis && analysisResult && selectedDirectionId
           ? { analysisId: analysisResult.analysisId, directionId: selectedDirectionId }
           : {}),
+        ...(parent ? { parentJobId: parent.jobId } : {}),
       });
-      setResult(nextResult);
+      setResults((current) =>
+        current.some((item) => item.jobId === nextResult.jobId)
+          ? current
+          : [...current, nextResult],
+      );
+      setActiveJobId(nextResult.jobId);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "生成失败，请稍后重试。");
     } finally {
+      modelRequestInFlight.current = false;
       setGenerating(false);
+    }
+  }
+
+  async function refineCurrentResult() {
+    const instruction = revisionInstruction.trim();
+    if (!activeResult || instruction.length < 2 || busy || modelRequestInFlight.current) {
+      return;
+    }
+
+    modelRequestInFlight.current = true;
+    setRefining(true);
+    setErrorMessage("");
+    try {
+      const nextResult = await refineGeneration({
+        parentJobId: activeResult.jobId,
+        instruction,
+      });
+      setResults((current) =>
+        current.some((item) => item.jobId === nextResult.jobId)
+          ? current
+          : [...current, nextResult],
+      );
+      setActiveJobId(nextResult.jobId);
+      setSelectedDirectionId(nextResult.directionId);
+      setRevisionInstruction("");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "继续修改失败，请稍后重试。");
+    } finally {
+      modelRequestInFlight.current = false;
+      setRefining(false);
+    }
+  }
+
+  async function downloadCurrentResult() {
+    if (!activeResult || saving) {
+      return;
+    }
+
+    setSaving(true);
+    setErrorMessage("");
+    try {
+      await saveGeneratedImage(activeResult.resultUrl);
+      await Taro.showToast({ title: "图片已保存", icon: "success" });
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "图片保存失败，请稍后重试。");
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -174,8 +293,11 @@ export default function Index() {
           {modes.map((item) => (
             <View
               key={item.value}
-              className={`mode-card ${mode === item.value ? "mode-card--active" : ""}`}
+              className={`mode-card ${mode === item.value ? "mode-card--active" : ""} ${busy ? "mode-card--disabled" : ""}`}
               onClick={() => {
+                if (busy) {
+                  return;
+                }
                 setMode(item.value);
                 clearDerivedState();
               }}
@@ -193,7 +315,10 @@ export default function Index() {
           <Text className="step-number">02</Text>
           <Text className="section-title">上传原款图片</Text>
         </View>
-        <View className={`upload-card ${image ? "upload-card--filled" : ""}`} onClick={chooseImage}>
+        <View
+          className={`upload-card ${image ? "upload-card--filled" : ""} ${busy ? "upload-card--disabled" : ""}`}
+          onClick={chooseImage}
+        >
           {image ? (
             <>
               <Image className="source-image" src={image.path} mode="aspectFit" />
@@ -218,6 +343,7 @@ export default function Index() {
         <Text className="field-label">必须保留</Text>
         <Textarea
           className="field-input field-input--short"
+          disabled={busy}
           value={preserveItems}
           maxlength={500}
           placeholder="例如：黑白格纹袖口、深蓝牛仔面料"
@@ -231,6 +357,7 @@ export default function Index() {
         <Text className="field-label">想怎么改</Text>
         <Textarea
           className="field-input"
+          disabled={busy}
           value={changeRequest}
           maxlength={1_000}
           placeholder="例如：调整为复古工装短夹克，重做整体廓形、结构分割、门襟、口袋和五金"
@@ -243,6 +370,7 @@ export default function Index() {
         <Text className="field-label">目标风格</Text>
         <Textarea
           className="field-input field-input--short"
+          disabled={busy}
           value={styleDirection}
           maxlength={500}
           placeholder="例如：90 年代日系复古工装，真实可打样"
@@ -257,8 +385,11 @@ export default function Index() {
           {intensities.map((item) => (
             <View
               key={item.value}
-              className={`intensity-option ${intensity === item.value ? "intensity-option--active" : ""}`}
+              className={`intensity-option ${intensity === item.value ? "intensity-option--active" : ""} ${busy ? "intensity-option--disabled" : ""}`}
               onClick={() => {
+                if (busy) {
+                  return;
+                }
                 setIntensity(item.value);
                 clearDerivedState();
               }}
@@ -273,21 +404,15 @@ export default function Index() {
 
       {!analysisResult && (
         <>
-          <Button
-            className="generate-button"
-            disabled={!canRequest}
-            loading={analyzing}
-            onClick={analyze}
-          >
+          <Button className="generate-button" disabled={!canRequest} onClick={analyze}>
             {analyzing ? "正在分析原款，预计 1–2 分钟…" : "分析原款并生成 3 个方向"}
           </Button>
-          <Button
-            className="text-button"
-            disabled={!canRequest}
-            loading={generating}
-            onClick={() => generate(false)}
-          >
-            {generating ? "正在直接生成…" : "跳过分析，直接生成"}
+          <Button className="text-button" disabled={!canRequest} onClick={() => generate(false)}>
+            {generating
+              ? "正在直接生成…"
+              : latestDirectResult
+                ? "按原要求再生成一版"
+                : "跳过分析，直接生成"}
           </Button>
         </>
       )}
@@ -316,8 +441,13 @@ export default function Index() {
                   key={direction.id}
                   className={`direction-card ${selected ? "direction-card--active" : ""}`}
                   onClick={() => {
+                    if (busy) {
+                      return;
+                    }
                     setSelectedDirectionId(direction.id);
-                    setResult(null);
+                    const existing = latestMatchingResult(results, "analyzed", direction.id);
+                    setActiveJobId(existing?.jobId ?? null);
+                    setRevisionInstruction("");
                   }}
                 >
                   <View className="direction-heading">
@@ -354,10 +484,13 @@ export default function Index() {
           <Button
             className="generate-button"
             disabled={!canGenerateAnalyzed}
-            loading={generating}
             onClick={() => generate(true)}
           >
-            {generating ? "正在按选中方向生成…" : "按选中方向生成效果图"}
+            {generating
+              ? "正在按选中方向生成…"
+              : latestSelectedDirectionResult
+                ? "按选中方向再生成一版"
+                : "按选中方向生成效果图"}
           </Button>
           <Button className="text-button" disabled={busy} onClick={analyze}>
             重新分析原款
@@ -365,17 +498,102 @@ export default function Index() {
         </View>
       )}
 
-      {result && (
+      {activeResult && image && (
         <View className="result-section">
           <View className="result-heading">
             <Text className="result-kicker">DESIGN READY</Text>
             <Text className="result-title">你的改款方案</Text>
-            <Text className="result-summary">{result.summary}</Text>
+            <Text className="result-summary">{activeResult.summary}</Text>
           </View>
-          <Image className="result-image" src={result.resultUrl} mode="widthFix" />
+
+          <View className="comparison-grid">
+            <View className="comparison-item">
+              <Text className="comparison-label">
+                {activeResult.operation === "refine" && parentResult ? "上一版" : "原图"}
+              </Text>
+              <Image
+                className="comparison-image"
+                src={
+                  activeResult.operation === "refine" && parentResult
+                    ? parentResult.resultUrl
+                    : image.path
+                }
+                mode="aspectFit"
+              />
+            </View>
+            <View className="comparison-item">
+              <Text className="comparison-label comparison-label--current">当前结果</Text>
+              <Image className="comparison-image" src={activeResult.resultUrl} mode="aspectFit" />
+            </View>
+          </View>
+
           <View className="result-meta">
-            <Text>{result.directionName ?? "直接生成"}</Text>
-            <Text>{Math.max(1, Math.round(result.durationMs / 1_000))} 秒</Text>
+            <Text>{activeResult.directionName ?? "直接生成"}</Text>
+            <Text>
+              {operationLabels[activeResult.operation]} ·{" "}
+              {Math.max(1, Math.round(activeResult.durationMs / 1_000))} 秒
+            </Text>
+          </View>
+
+          <View className="result-actions">
+            <Button
+              className="result-action result-action--primary"
+              disabled={busy}
+              onClick={() => generate(activeResult.strategy === "analyzed", activeResult)}
+            >
+              {generating ? "正在生成…" : "按此方向再生成"}
+            </Button>
+            <Button className="result-action" disabled={saving} onClick={downloadCurrentResult}>
+              {saving ? "正在保存…" : "下载结果图"}
+            </Button>
+          </View>
+
+          <View className="refinement-panel">
+            <Text className="refinement-title">继续修改当前结果</Text>
+            <Text className="refinement-copy">
+              当前结果会作为下一版参考图，原始保留项和选中方向继续生效。
+            </Text>
+            <Textarea
+              className="refinement-input"
+              value={revisionInstruction}
+              maxlength={500}
+              placeholder="例如：袖型再宽松一点，门襟改为隐藏拉链，其余保持不变"
+              onInput={(event) => setRevisionInstruction(event.detail.value)}
+            />
+            <Button
+              className="refinement-button"
+              disabled={busy || revisionInstruction.trim().length < 2}
+              onClick={refineCurrentResult}
+            >
+              {refining ? "正在继续修改…" : "生成修改后的下一版"}
+            </Button>
+          </View>
+        </View>
+      )}
+
+      {results.length > 0 && (
+        <View className="section history-section">
+          <View className="history-heading">
+            <Text className="section-title">本次生成历史</Text>
+            <Text className="history-count">{results.length} 个版本</Text>
+          </View>
+          <View className="history-grid">
+            {results.map((item, index) => (
+              <View
+                key={item.jobId}
+                className={`history-card ${item.jobId === activeJobId ? "history-card--active" : ""}`}
+                onClick={() => {
+                  setActiveJobId(item.jobId);
+                  setSelectedDirectionId(item.directionId);
+                  setRevisionInstruction("");
+                }}
+              >
+                <Image className="history-image" src={item.resultUrl} mode="aspectFill" />
+                <Text className="history-version">版本 {index + 1}</Text>
+                <Text className="history-name">{item.directionName ?? "直接生成"}</Text>
+                <Text className="history-operation">{operationLabels[item.operation]}</Text>
+              </View>
+            ))}
           </View>
         </View>
       )}

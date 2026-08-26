@@ -126,7 +126,13 @@ class FakeAnalyzer implements GarmentAnalysisProvider {
 }
 
 async function createMultipartRequest(
-  options: { includeImage?: boolean; analysisId?: string; directionId?: string } = {},
+  options: {
+    includeImage?: boolean;
+    analysisId?: string;
+    directionId?: string;
+    parentJobId?: string;
+    idempotencyKey?: string;
+  } = {},
 ) {
   const form = new FormData();
   form.append("mode", "quick-derivative");
@@ -140,6 +146,9 @@ async function createMultipartRequest(
   if (options.directionId) {
     form.append("directionId", options.directionId);
   }
+  if (options.parentJobId) {
+    form.append("parentJobId", options.parentJobId);
+  }
   if (options.includeImage !== false) {
     form.append("sourceImage", new Blob([pngBytes], { type: "image/png" }), "jacket.png");
   }
@@ -149,7 +158,7 @@ async function createMultipartRequest(
     payload: Buffer.from(await request.arrayBuffer()),
     headers: {
       "content-type": request.headers.get("content-type") ?? "multipart/form-data",
-      "idempotency-key": "same-request",
+      "idempotency-key": options.idempotencyKey ?? "same-request",
     },
   };
 }
@@ -206,6 +215,8 @@ describe("generation API", () => {
         model: "fake-wan",
         strategy: "direct",
         directionId: null,
+        operation: "initial",
+        parentJobId: null,
       });
       expect(result.summary).toContain("黑白格纹袖口");
       expect(context.provider.generateVariation).toHaveBeenCalledTimes(1);
@@ -286,10 +297,13 @@ describe("generation API", () => {
       });
 
       expect(generationResponse.statusCode).toBe(201);
-      expect(generationResponse.json<GenerationApiResponse>()).toMatchObject({
+      const generated = generationResponse.json<GenerationApiResponse>();
+      expect(generated).toMatchObject({
         strategy: "analyzed",
         directionId: "direction-1",
         directionName: "非对称工装1",
+        operation: "initial",
+        parentJobId: null,
       });
       const providerInput = context.provider.generateVariation.mock.calls[0]?.[0];
       expect(providerInput?.prompt).toContain("只设置一个左侧立体袋");
@@ -297,6 +311,96 @@ describe("generation API", () => {
       expect(providerInput?.prompt).not.toContain("腰上两厘米");
       expect(providerInput?.prompt).not.toContain("- 口袋：左右对称贴袋");
       expect(providerInput?.prompt).not.toContain("- 面料：深蓝牛仔");
+
+      const regeneratedResponse = await context.app.inject({
+        method: "POST",
+        url: "/api/v1/generations",
+        ...(await createMultipartRequest({
+          analysisId: analyzed.analysisId,
+          directionId: "direction-1",
+          parentJobId: generated.jobId,
+          idempotencyKey: "regenerate-request",
+        })),
+      });
+      expect(regeneratedResponse.statusCode).toBe(201);
+      const regenerated = regeneratedResponse.json<GenerationApiResponse>();
+      expect(regenerated).toMatchObject({
+        operation: "regenerate",
+        parentJobId: generated.jobId,
+        directionId: "direction-1",
+      });
+
+      const refinementResponse = await context.app.inject({
+        method: "POST",
+        url: `/api/v1/generations/${regenerated.jobId}/refinements`,
+        headers: { "idempotency-key": "refinement-request" },
+        payload: { instruction: "袖型再宽松一点，但保留格纹袖口" },
+      });
+      expect(refinementResponse.statusCode).toBe(201);
+      const refined = refinementResponse.json<GenerationApiResponse>();
+      expect(refined).toMatchObject({
+        operation: "refine",
+        parentJobId: regenerated.jobId,
+        revisionInstruction: "袖型再宽松一点，但保留格纹袖口",
+        directionId: "direction-1",
+      });
+      const refinementProviderInput = context.provider.generateVariation.mock.calls[2]?.[0];
+      expect(refinementProviderInput?.sourceImage.fileName).toBe("result.png");
+      expect(refinementProviderInput?.promptVersion).toBe("garment-iteration-v1");
+      expect(refinementProviderInput?.prompt).toContain("口袋不得左右对称");
+      expect(refinementProviderInput?.prompt).toContain("袖型再宽松一点，但保留格纹袖口");
+
+      const repeatedRefinementResponse = await context.app.inject({
+        method: "POST",
+        url: `/api/v1/generations/${regenerated.jobId}/refinements`,
+        headers: { "idempotency-key": "refinement-request" },
+        payload: { instruction: "袖型再宽松一点，但保留格纹袖口" },
+      });
+      expect(repeatedRefinementResponse.statusCode).toBe(200);
+      expect(repeatedRefinementResponse.json<GenerationApiResponse>().jobId).toBe(refined.jobId);
+      expect(context.provider.generateVariation).toHaveBeenCalledTimes(3);
+
+      let lastRefined = refined;
+      for (let index = 2; index <= 5; index += 1) {
+        const nextRefinementResponse = await context.app.inject({
+          method: "POST",
+          url: `/api/v1/generations/${lastRefined.jobId}/refinements`,
+          headers: { "idempotency-key": `refinement-request-${index}` },
+          payload: { instruction: `第 ${index} 次继续调整局部结构` },
+        });
+        expect(nextRefinementResponse.statusCode).toBe(201);
+        lastRefined = nextRefinementResponse.json<GenerationApiResponse>();
+      }
+
+      const overLimitResponse = await context.app.inject({
+        method: "POST",
+        url: `/api/v1/generations/${lastRefined.jobId}/refinements`,
+        headers: { "idempotency-key": "refinement-over-limit" },
+        payload: { instruction: "第六次修改不应触发模型" },
+      });
+      expect(overLimitResponse.statusCode).toBe(409);
+      expect(overLimitResponse.json()).toMatchObject({
+        code: "REFINEMENT_LIMIT_REACHED",
+        retryable: false,
+      });
+      expect(context.provider.generateVariation).toHaveBeenCalledTimes(7);
+
+      const mismatchedParentResponse = await context.app.inject({
+        method: "POST",
+        url: "/api/v1/generations",
+        ...(await createMultipartRequest({
+          analysisId: analyzed.analysisId,
+          directionId: "direction-2",
+          parentJobId: generated.jobId,
+          idempotencyKey: "mismatched-parent-request",
+        })),
+      });
+      expect(mismatchedParentResponse.statusCode).toBe(409);
+      expect(mismatchedParentResponse.json()).toMatchObject({
+        code: "PARENT_GENERATION_MISMATCH",
+        retryable: false,
+      });
+      expect(context.provider.generateVariation).toHaveBeenCalledTimes(7);
     } finally {
       await context.app.close();
       await rm(context.assetDirectory, { recursive: true, force: true });

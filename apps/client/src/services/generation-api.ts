@@ -18,6 +18,12 @@ export interface CreateGenerationRequest {
   readonly intensity: DesignIntensity;
   readonly analysisId?: string;
   readonly directionId?: string;
+  readonly parentJobId?: string;
+}
+
+export interface RefineGenerationRequest {
+  readonly parentJobId: string;
+  readonly instruction: string;
 }
 
 function createIdempotencyKey(): string {
@@ -49,6 +55,9 @@ async function uploadGarmentRequest<TResponse>(
   if (input.analysisId && input.directionId) {
     formData.analysisId = input.analysisId;
     formData.directionId = input.directionId;
+  }
+  if (input.parentJobId) {
+    formData.parentJobId = input.parentJobId;
   }
 
   const response = await Taro.uploadFile({
@@ -92,4 +101,30 @@ export async function createGeneration(
   input: CreateGenerationRequest,
 ): Promise<GenerationApiResponse> {
   return uploadGarmentRequest("/api/v1/generations", input);
+}
+
+export async function refineGeneration(
+  input: RefineGenerationRequest,
+): Promise<GenerationApiResponse> {
+  const response = await Taro.request<GenerationApiResponse | ApiErrorResponse>({
+    url: `${API_BASE_URL}/api/v1/generations/${input.parentJobId}/refinements`,
+    method: "POST",
+    data: { instruction: input.instruction },
+    timeout: MODEL_REQUEST_TIMEOUT_MS,
+    header: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": createIdempotencyKey(),
+    },
+  });
+
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    const error = response.data as Partial<ApiErrorResponse>;
+    throw new GenerationApiError(
+      error.message ?? "继续修改失败，请稍后重试。",
+      error.code ?? "GARMENT_REFINEMENT_FAILED",
+      error.retryable ?? false,
+    );
+  }
+
+  return response.data as GenerationApiResponse;
 }

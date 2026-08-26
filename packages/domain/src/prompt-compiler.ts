@@ -60,6 +60,11 @@ export interface CompileAnalyzedPromptInput {
   readonly direction: DesignDirection;
 }
 
+export interface CompileGarmentIterationPromptInput {
+  readonly basePrompt: string;
+  readonly revisionInstructions: readonly string[];
+}
+
 export function compileAnalyzedGarmentPrompt(input: CompileAnalyzedPromptInput): string {
   const gate = applyEvidenceGate(input.analysis.visualFacts);
   const acceptedFacts = gate.accepted
@@ -104,5 +109,22 @@ export function compileAnalyzedGarmentPrompt(input: CompileAnalyzedPromptInput):
     "只把可信视觉事实作为原款描述。对 inferred、unknown 或低置信度区域，不得自行补充具体结构；除用户明确要求修改外，应尽量保持输入图原貌。",
     "所有新增结构必须符合真实裁片、缝制、受力和穿着逻辑，清晰呈现面料、缝线、口袋厚度和部件连接关系。",
     `禁止出现：${negatives.join("、")}。`,
+  ].join("\n\n");
+}
+
+export function compileGarmentIterationPrompt(input: CompileGarmentIterationPromptInput): string {
+  const revisionInstructions = unique(input.revisionInstructions);
+  if (revisionInstructions.length === 0) {
+    throw new Error("继续修改至少需要一条有效指令。");
+  }
+
+  return [
+    input.basePrompt.trim(),
+    "这是基于上一版生成结果的继续修改。当前输入图片是上一版结果，不是新的原款。原始保留项、可信视觉事实、选定方向和禁止项仍然全部有效。",
+    `累计追加修改（按顺序全部执行）：\n${revisionInstructions
+      .map((instruction, index) => `${index + 1}. ${instruction}`)
+      .join("\n")}`,
+    `本轮重点：${revisionInstructions.at(-1)}。只修改与本轮要求直接相关的区域；没有被要求改变的结构、面料、颜色、构图和已完成设计应尽量保持上一版。`,
+    "追加修改的优先级低于必须保留项和结构硬约束。若追加要求与硬约束冲突，以硬约束为准，不得为了执行局部修改破坏服装的可生产性。",
   ].join("\n\n");
 }

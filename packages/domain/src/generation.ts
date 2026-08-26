@@ -7,6 +7,16 @@ export type DesignIntensity = (typeof designIntensities)[number];
 export const supportedImageMimeTypes = ["image/jpeg", "image/png", "image/webp"] as const;
 export type SupportedImageMimeType = (typeof supportedImageMimeTypes)[number];
 
+export const generationPromptVersions = [
+  "garment-redesign-v1",
+  "garment-analysis-v1",
+  "garment-iteration-v1",
+] as const;
+export type GenerationPromptVersion = (typeof generationPromptVersions)[number];
+
+export const generationOperations = ["initial", "regenerate", "refine"] as const;
+export type GenerationOperation = (typeof generationOperations)[number];
+
 export interface SourceImageInput {
   readonly bytes: Uint8Array;
   readonly fileName: string;
@@ -21,7 +31,7 @@ export interface GarmentGenerationInput {
   readonly intensity: DesignIntensity;
   readonly sourceImage: SourceImageInput;
   readonly outputCount: 1;
-  readonly promptVersion: "garment-redesign-v1" | "garment-analysis-v1";
+  readonly promptVersion: GenerationPromptVersion;
 }
 
 export interface GarmentImageProviderInput {
@@ -64,6 +74,10 @@ export interface GenerationApiResponse {
   readonly strategy: "direct" | "analyzed";
   readonly directionId: string | null;
   readonly directionName: string | null;
+  readonly operation: GenerationOperation;
+  readonly parentJobId: string | null;
+  readonly revisionInstruction: string | null;
+  readonly createdAt: string;
 }
 
 export interface ApiErrorResponse {

@@ -14,6 +14,10 @@ const result: GenerationApiResponse = {
   strategy: "direct",
   directionId: null,
   directionName: null,
+  operation: "initial",
+  parentJobId: null,
+  revisionInstruction: null,
+  createdAt: "2026-08-26T12:00:00.000Z",
 };
 
 describe("GenerationResultRepository", () => {
@@ -28,8 +32,8 @@ describe("GenerationResultRepository", () => {
     });
     const repository = new GenerationResultRepository();
 
-    const first = repository.executeOnce("same-key", operation);
-    const second = repository.executeOnce("same-key", operation);
+    const first = repository.executeOnce("same-key", "same-request", operation);
+    const second = repository.executeOnce("same-key", "same-request", operation);
     release();
 
     await expect(first).resolves.toEqual({ result, reused: false });
@@ -43,12 +47,37 @@ describe("GenerationResultRepository", () => {
       throw new Error("temporary failure");
     });
 
-    await expect(repository.executeOnce("retry-key", failedOperation)).rejects.toThrow(
+    await expect(repository.executeOnce("retry-key", "request", failedOperation)).rejects.toThrow(
       "temporary failure",
     );
-    await expect(repository.executeOnce("retry-key", async () => result)).resolves.toEqual({
-      result,
-      reused: false,
+    await expect(
+      repository.executeOnce("retry-key", "request", async () => result),
+    ).resolves.toEqual({ result, reused: false });
+  });
+
+  it("rejects reuse of an idempotency key for a different request", async () => {
+    const repository = new GenerationResultRepository();
+
+    await repository.executeOnce("same-key", "request-one", async () => result);
+
+    await expect(
+      repository.executeOnce("same-key", "request-two", async () => result),
+    ).rejects.toThrow("同一个幂等键不能用于不同的生成请求");
+  });
+
+  it("stores generation records for later refinement", () => {
+    const repository = new GenerationResultRepository();
+    repository.save({
+      response: result,
+      assetFileName: "result.png",
+      assetMimeType: "image/png",
+      basePrompt: "base prompt",
+      baseSummary: "快速衍生",
+      baseRequestFingerprint: "request",
+      revisionInstructions: [],
     });
+
+    expect(repository.get(result.jobId)?.response).toEqual(result);
+    expect(repository.get("00000000-0000-0000-0000-000000000999")).toBeNull();
   });
 });
