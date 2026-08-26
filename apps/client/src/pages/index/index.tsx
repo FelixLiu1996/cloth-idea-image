@@ -1,10 +1,19 @@
+import type {
+  DesignIntensity,
+  GarmentAnalysisApiResponse,
+  GenerationApiResponse,
+  GenerationMode,
+} from "@cloth-idea/domain";
 import { Button, Image, Text, Textarea, View } from "@tarojs/components";
-import type { DesignIntensity, GenerationApiResponse, GenerationMode } from "@cloth-idea/domain";
 import Taro from "@tarojs/taro";
 import { useMemo, useState } from "react";
 
 import { selectGarmentImage, type SelectedImage } from "../../platform/image-platform";
-import { createGeneration } from "../../services/generation-api";
+import {
+  analyzeGarment,
+  createGeneration,
+  type CreateGenerationRequest,
+} from "../../services/generation-api";
 import "./index.scss";
 
 const modes: readonly {
@@ -33,6 +42,12 @@ const intensities: readonly { value: DesignIntensity; label: string }[] = [
   { value: "high", label: "大改" },
 ];
 
+const riskLabels = {
+  low: "低生产风险",
+  medium: "中等生产风险",
+  high: "高生产风险",
+} as const;
+
 export default function Index() {
   const [mode, setMode] = useState<GenerationMode>("quick-derivative");
   const [image, setImage] = useState<SelectedImage | null>(null);
@@ -40,18 +55,44 @@ export default function Index() {
   const [changeRequest, setChangeRequest] = useState("");
   const [styleDirection, setStyleDirection] = useState("");
   const [intensity, setIntensity] = useState<DesignIntensity>("medium");
-  const [submitting, setSubmitting] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [generating, setGenerating] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  const [analysisResult, setAnalysisResult] = useState<GarmentAnalysisApiResponse | null>(null);
+  const [selectedDirectionId, setSelectedDirectionId] = useState<string | null>(null);
   const [result, setResult] = useState<GenerationApiResponse | null>(null);
 
-  const canSubmit = useMemo(
+  const busy = analyzing || generating;
+  const canRequest = useMemo(
     () =>
       image !== null &&
       changeRequest.trim().length >= 2 &&
       styleDirection.trim().length >= 2 &&
-      !submitting,
-    [changeRequest, image, styleDirection, submitting],
+      !busy,
+    [busy, changeRequest, image, styleDirection],
   );
+  const canGenerateAnalyzed = canRequest && analysisResult !== null && selectedDirectionId !== null;
+
+  function clearDerivedState() {
+    setAnalysisResult(null);
+    setSelectedDirectionId(null);
+    setResult(null);
+    setErrorMessage("");
+  }
+
+  function requestInput(): CreateGenerationRequest | null {
+    if (!image) {
+      return null;
+    }
+    return {
+      imagePath: image.path,
+      mode,
+      preserveItems,
+      changeRequest,
+      styleDirection,
+      intensity,
+    };
+  }
 
   async function chooseImage() {
     const selected = await selectGarmentImage();
@@ -61,33 +102,56 @@ export default function Index() {
         return;
       }
       setImage(selected);
-      setResult(null);
-      setErrorMessage("");
+      clearDerivedState();
     }
   }
 
-  async function submit() {
-    if (!canSubmit || !image) {
+  async function analyze() {
+    const input = requestInput();
+    if (!canRequest || !input) {
       return;
     }
 
-    setSubmitting(true);
+    setAnalyzing(true);
+    setErrorMessage("");
+    setAnalysisResult(null);
+    setSelectedDirectionId(null);
+    setResult(null);
+    try {
+      const nextAnalysis = await analyzeGarment(input);
+      setAnalysisResult(nextAnalysis);
+      setSelectedDirectionId(nextAnalysis.analysis.recommendedDirectionId);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "分析失败，请稍后重试。");
+    } finally {
+      setAnalyzing(false);
+    }
+  }
+
+  async function generate(useAnalysis: boolean) {
+    const input = requestInput();
+    if (!canRequest || !input) {
+      return;
+    }
+    if (useAnalysis && (!analysisResult || !selectedDirectionId)) {
+      return;
+    }
+
+    setGenerating(true);
     setErrorMessage("");
     setResult(null);
     try {
       const nextResult = await createGeneration({
-        imagePath: image.path,
-        mode,
-        preserveItems,
-        changeRequest,
-        styleDirection,
-        intensity,
+        ...input,
+        ...(useAnalysis && analysisResult && selectedDirectionId
+          ? { analysisId: analysisResult.analysisId, directionId: selectedDirectionId }
+          : {}),
       });
       setResult(nextResult);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "生成失败，请稍后重试。");
     } finally {
-      setSubmitting(false);
+      setGenerating(false);
     }
   }
 
@@ -96,7 +160,9 @@ export default function Index() {
       <View className="hero">
         <Text className="eyebrow">AI GARMENT STUDIO</Text>
         <Text className="hero-title">从一件原款，找到下一件好卖的衣服</Text>
-        <Text className="hero-copy">上传服装图，锁定必须保留的设计，再让 AI 做整体改款。</Text>
+        <Text className="hero-copy">
+          先识别可信的原款结构，再选择设计方向，最后生成一张效果图。
+        </Text>
       </View>
 
       <View className="section">
@@ -109,7 +175,10 @@ export default function Index() {
             <View
               key={item.value}
               className={`mode-card ${mode === item.value ? "mode-card--active" : ""}`}
-              onClick={() => setMode(item.value)}
+              onClick={() => {
+                setMode(item.value);
+                clearDerivedState();
+              }}
             >
               <Text className="mode-badge">{item.badge}</Text>
               <Text className="mode-title">{item.title}</Text>
@@ -152,9 +221,12 @@ export default function Index() {
           value={preserveItems}
           maxlength={500}
           placeholder="例如：黑白格纹袖口、深蓝牛仔面料"
-          onInput={(event) => setPreserveItems(event.detail.value)}
+          onInput={(event) => {
+            setPreserveItems(event.detail.value);
+            clearDerivedState();
+          }}
         />
-        <Text className="field-tip">多个保留项可用逗号分隔，AI 会把它们当作硬约束。</Text>
+        <Text className="field-tip">多个保留项可用逗号分隔，它们会作为生图硬约束。</Text>
 
         <Text className="field-label">想怎么改</Text>
         <Textarea
@@ -162,7 +234,10 @@ export default function Index() {
           value={changeRequest}
           maxlength={1_000}
           placeholder="例如：调整为复古工装短夹克，重做整体廓形、结构分割、门襟、口袋和五金"
-          onInput={(event) => setChangeRequest(event.detail.value)}
+          onInput={(event) => {
+            setChangeRequest(event.detail.value);
+            clearDerivedState();
+          }}
         />
 
         <Text className="field-label">目标风格</Text>
@@ -171,7 +246,10 @@ export default function Index() {
           value={styleDirection}
           maxlength={500}
           placeholder="例如：90 年代日系复古工装，真实可打样"
-          onInput={(event) => setStyleDirection(event.detail.value)}
+          onInput={(event) => {
+            setStyleDirection(event.detail.value);
+            clearDerivedState();
+          }}
         />
 
         <Text className="field-label">改款幅度</Text>
@@ -180,7 +258,10 @@ export default function Index() {
             <View
               key={item.value}
               className={`intensity-option ${intensity === item.value ? "intensity-option--active" : ""}`}
-              onClick={() => setIntensity(item.value)}
+              onClick={() => {
+                setIntensity(item.value);
+                clearDerivedState();
+              }}
             >
               {item.label}
             </View>
@@ -190,15 +271,99 @@ export default function Index() {
 
       {errorMessage && <View className="error-card">{errorMessage}</View>}
 
-      <Button
-        className="generate-button"
-        disabled={!canSubmit}
-        loading={submitting}
-        onClick={submit}
-      >
-        {submitting ? "正在理解原款并生成…" : "生成改款方案"}
-      </Button>
-      <Text className="privacy-note">原图仅用于本次生成，模型密钥不会发送到手机端</Text>
+      {!analysisResult && (
+        <>
+          <Button
+            className="generate-button"
+            disabled={!canRequest}
+            loading={analyzing}
+            onClick={analyze}
+          >
+            {analyzing ? "正在分析原款，预计 1–2 分钟…" : "分析原款并生成 3 个方向"}
+          </Button>
+          <Button
+            className="text-button"
+            disabled={!canRequest}
+            loading={generating}
+            onClick={() => generate(false)}
+          >
+            {generating ? "正在直接生成…" : "跳过分析，直接生成"}
+          </Button>
+        </>
+      )}
+      <Text className="privacy-note">原图仅用于当前请求；模型密钥不会发送到手机端</Text>
+
+      {analysisResult && (
+        <View className="section analysis-section">
+          <View className="section-heading">
+            <Text className="step-number">04</Text>
+            <View>
+              <Text className="section-title">选择设计方向</Text>
+              <Text className="analysis-meta">
+                采纳 {analysisResult.evidenceSummary.accepted} 项可见事实 · 待复核{" "}
+                {analysisResult.evidenceSummary.needsReview} 项 · 未知{" "}
+                {analysisResult.evidenceSummary.unknown} 项
+              </Text>
+            </View>
+          </View>
+
+          <View className="direction-list">
+            {analysisResult.analysis.designDirections.map((direction) => {
+              const selected = selectedDirectionId === direction.id;
+              const recommended = analysisResult.analysis.recommendedDirectionId === direction.id;
+              return (
+                <View
+                  key={direction.id}
+                  className={`direction-card ${selected ? "direction-card--active" : ""}`}
+                  onClick={() => {
+                    setSelectedDirectionId(direction.id);
+                    setResult(null);
+                  }}
+                >
+                  <View className="direction-heading">
+                    <Text className="direction-name">{direction.name}</Text>
+                    {recommended && <Text className="recommended-badge">推荐</Text>}
+                  </View>
+                  <Text className="direction-summary">{direction.summary}</Text>
+                  <View className="change-list">
+                    {direction.changes.map((change) => (
+                      <Text key={`${change.area}-${change.instruction}`} className="change-item">
+                        · {change.instruction}
+                      </Text>
+                    ))}
+                  </View>
+                  <Text className={`risk-label risk-label--${direction.productionRisk.level}`}>
+                    {riskLabels[direction.productionRisk.level]} · {direction.productionRisk.reason}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+
+          {analysisResult.analysis.conflictsOrQuestions.length > 0 && (
+            <View className="review-note">
+              <Text className="review-title">分析提醒</Text>
+              {analysisResult.analysis.conflictsOrQuestions.map((question) => (
+                <Text key={question} className="review-item">
+                  · {question}
+                </Text>
+              ))}
+            </View>
+          )}
+
+          <Button
+            className="generate-button"
+            disabled={!canGenerateAnalyzed}
+            loading={generating}
+            onClick={() => generate(true)}
+          >
+            {generating ? "正在按选中方向生成…" : "按选中方向生成效果图"}
+          </Button>
+          <Button className="text-button" disabled={busy} onClick={analyze}>
+            重新分析原款
+          </Button>
+        </View>
+      )}
 
       {result && (
         <View className="result-section">
@@ -209,7 +374,7 @@ export default function Index() {
           </View>
           <Image className="result-image" src={result.resultUrl} mode="widthFix" />
           <View className="result-meta">
-            <Text>{result.model}</Text>
+            <Text>{result.directionName ?? "直接生成"}</Text>
             <Text>{Math.max(1, Math.round(result.durationMs / 1_000))} 秒</Text>
           </View>
         </View>

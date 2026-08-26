@@ -3,25 +3,33 @@ import { randomUUID } from "node:crypto";
 import cors from "@fastify/cors";
 import multipart, { type MultipartFile } from "@fastify/multipart";
 import {
+  buildGarmentPrompt,
+  compileAnalyzedGarmentPrompt,
   createGenerationSummary,
   designIntensities,
+  findDesignDirection,
   generationModes,
   supportedImageMimeTypes,
   type ApiErrorResponse,
+  type GarmentAnalysisBrief,
   type GarmentGenerationInput,
   type GenerationApiResponse,
+  type SourceImageInput,
   type SupportedImageMimeType,
 } from "@cloth-idea/domain";
 import {
   GarmentProviderError,
+  type GarmentAnalysisProvider,
   type GarmentImageProvider,
   type ProviderErrorCode,
+  UnconfiguredGarmentAnalysisProvider,
 } from "@cloth-idea/model-providers";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import { z } from "zod";
 
 import { LocalAssetStore } from "./asset-store";
 import type { ServerConfig } from "./config";
+import { GarmentAnalysisRepository } from "./garment-analysis-repository";
 import { GenerationResultRepository } from "./generation-repository";
 
 const generationFieldsSchema = z.object({
@@ -41,11 +49,31 @@ const generationFieldsSchema = z.object({
   intensity: z.enum(designIntensities),
 });
 
+const createGenerationFieldsSchema = generationFieldsSchema
+  .extend({
+    analysisId: z.string().uuid().optional(),
+    directionId: z
+      .string()
+      .regex(/^direction-[1-3]$/)
+      .optional(),
+  })
+  .superRefine((fields, context) => {
+    if ((fields.analysisId === undefined) !== (fields.directionId === undefined)) {
+      context.addIssue({
+        code: "custom",
+        path: ["analysisId"],
+        message: "analysisId 和 directionId 必须同时提供。",
+      });
+    }
+  });
+
 interface BuildAppOptions {
   readonly config: ServerConfig;
   readonly provider: GarmentImageProvider;
+  readonly analyzer?: GarmentAnalysisProvider;
   readonly assetStore?: LocalAssetStore;
   readonly repository?: GenerationResultRepository;
+  readonly analysisRepository?: GarmentAnalysisRepository;
   readonly logger?: boolean;
 }
 
@@ -113,9 +141,7 @@ function providerStatus(code: ProviderErrorCode): number {
   }
 }
 
-async function fileToSourceImage(
-  file: MultipartFile,
-): Promise<GarmentGenerationInput["sourceImage"]> {
+async function fileToSourceImage(file: MultipartFile): Promise<SourceImageInput> {
   const bytes = await file.toBuffer();
   if (bytes.length === 0) {
     throw new RequestError(400, "EMPTY_IMAGE", "上传的图片为空。");
@@ -132,10 +158,42 @@ async function fileToSourceImage(
   };
 }
 
+async function readMultipartRequest(request: FastifyRequest): Promise<{
+  readonly fields: Record<string, string>;
+  readonly sourceImage: SourceImageInput;
+}> {
+  const fields: Record<string, string> = {};
+  let sourceImage: SourceImageInput | undefined;
+
+  for await (const part of request.parts()) {
+    if (part.type === "file") {
+      if (part.fieldname !== "sourceImage") {
+        part.file.resume();
+        continue;
+      }
+      sourceImage = await fileToSourceImage(part);
+    } else {
+      fields[part.fieldname] = String(part.value);
+    }
+  }
+
+  if (!sourceImage) {
+    throw new RequestError(400, "IMAGE_REQUIRED", "请选择一张服装图片。");
+  }
+  return { fields, sourceImage };
+}
+
+function readIdempotencyKey(request: FastifyRequest): string | undefined {
+  const header = request.headers["idempotency-key"];
+  return Array.isArray(header) ? header[0] : header;
+}
+
 export async function buildApp(options: BuildAppOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: options.logger ?? false });
   const assetStore = options.assetStore ?? new LocalAssetStore(options.config.assetDirectory);
   const repository = options.repository ?? new GenerationResultRepository();
+  const analysisRepository = options.analysisRepository ?? new GarmentAnalysisRepository();
+  const analyzer = options.analyzer ?? new UnconfiguredGarmentAnalysisProvider();
 
   await app.register(cors, {
     origin: options.config.clientOrigin === "*" ? true : options.config.clientOrigin,
@@ -144,8 +202,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     limits: {
       files: 1,
       fileSize: options.config.maxUploadBytes,
-      fields: 8,
-      parts: 9,
+      fields: 10,
+      parts: 11,
     },
   });
 
@@ -154,6 +212,9 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     provider: options.provider.provider,
     model: options.provider.model,
     providerConfigured: options.provider.configured,
+    analysisProvider: analyzer.provider,
+    analysisModel: analyzer.model,
+    analysisProviderConfigured: analyzer.configured,
   }));
 
   app.get("/api/v1/capabilities", async () => ({
@@ -162,33 +223,52 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     supportedImageMimeTypes,
     maxUploadBytes: options.config.maxUploadBytes,
     outputCount: 1,
+    analysisEnabled: analyzer.configured,
+    analysisSchemaVersion: "garment-dna-v0.2",
   }));
 
-  app.post("/api/v1/generations", async (request, reply) => {
-    const idempotencyHeader = request.headers["idempotency-key"];
-    const idempotencyKey = Array.isArray(idempotencyHeader)
-      ? idempotencyHeader[0]
-      : idempotencyHeader;
-    const fields: Record<string, string> = {};
-    let sourceImage: GarmentGenerationInput["sourceImage"] | undefined;
-
-    for await (const part of request.parts()) {
-      if (part.type === "file") {
-        if (part.fieldname !== "sourceImage") {
-          part.file.resume();
-          continue;
-        }
-        sourceImage = await fileToSourceImage(part);
-      } else {
-        fields[part.fieldname] = String(part.value);
-      }
-    }
-
-    if (!sourceImage) {
-      throw new RequestError(400, "IMAGE_REQUIRED", "请选择一张服装图片。");
-    }
-
+  app.post("/api/v1/analyses", async (request, reply) => {
+    const { fields, sourceImage } = await readMultipartRequest(request);
     const parsedFields = generationFieldsSchema.safeParse(fields);
+    if (!parsedFields.success) {
+      throw new RequestError(
+        400,
+        "INVALID_ANALYSIS_REQUEST",
+        parsedFields.error.issues[0]?.message ?? "分析参数不完整。",
+      );
+    }
+
+    const brief: GarmentAnalysisBrief = parsedFields.data;
+    const execution = await analysisRepository.executeOnce(
+      readIdempotencyKey(request),
+      async () => {
+        const providerResult = await analyzer.analyze({
+          sourceImage,
+          brief,
+          schemaVersion: "garment-dna-v0.2",
+        });
+        const result = analysisRepository.save(sourceImage, providerResult);
+        request.log.info(
+          {
+            analysisId: result.analysisId,
+            provider: providerResult.provider,
+            model: providerResult.model,
+            providerRequestId: providerResult.providerRequestId,
+            schemaVersion: providerResult.analysis.schemaVersion,
+            durationMs: providerResult.durationMs,
+          },
+          "garment analysis completed",
+        );
+        return result;
+      },
+    );
+
+    return reply.code(execution.reused ? 200 : 201).send(execution.result);
+  });
+
+  app.post("/api/v1/generations", async (request, reply) => {
+    const { fields, sourceImage } = await readMultipartRequest(request);
+    const parsedFields = createGenerationFieldsSchema.safeParse(fields);
     if (!parsedFields.success) {
       throw new RequestError(
         400,
@@ -197,14 +277,50 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       );
     }
 
+    const { analysisId, directionId, ...generationFields } = parsedFields.data;
+    const analyzed = analysisId !== undefined && directionId !== undefined;
     const input: GarmentGenerationInput = {
-      ...parsedFields.data,
+      ...generationFields,
       sourceImage,
       outputCount: 1,
-      promptVersion: "garment-redesign-v1",
+      promptVersion: analyzed ? "garment-analysis-v1" : "garment-redesign-v1",
     };
-    const execution = await repository.executeOnce(idempotencyKey, async () => {
-      const providerResult = await options.provider.generateVariation(input);
+
+    let prompt: string;
+    let directionName: string | null = null;
+    if (analyzed) {
+      const storedAnalysis = analysisRepository.get(analysisId);
+      if (!storedAnalysis) {
+        throw new RequestError(404, "ANALYSIS_NOT_FOUND", "服装分析不存在或已过期，请重新分析。");
+      }
+      if (!analysisRepository.matchesSourceImage(analysisId, sourceImage)) {
+        throw new RequestError(
+          409,
+          "ANALYSIS_IMAGE_MISMATCH",
+          "当前图片与服装分析不一致，请重新分析。",
+        );
+      }
+      const direction = findDesignDirection(storedAnalysis.analysis, directionId);
+      if (!direction) {
+        throw new RequestError(404, "DIRECTION_NOT_FOUND", "选择的设计方向不存在。");
+      }
+      directionName = direction.name;
+      prompt = compileAnalyzedGarmentPrompt({
+        request: input,
+        analysis: storedAnalysis.analysis,
+        direction,
+      });
+    } else {
+      prompt = buildGarmentPrompt(input);
+    }
+
+    const execution = await repository.executeOnce(readIdempotencyKey(request), async () => {
+      const providerResult = await options.provider.generateVariation({
+        sourceImage,
+        prompt,
+        outputCount: 1,
+        promptVersion: input.promptVersion,
+      });
       const firstAsset = providerResult.assets[0];
       if (!firstAsset) {
         throw new GarmentProviderError("PROVIDER_BAD_RESPONSE", "生图结果中没有图片。");
@@ -212,14 +328,18 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
 
       const jobId = randomUUID();
       const storedAsset = await assetStore.saveResult(jobId, firstAsset);
+      const baseSummary = createGenerationSummary(input);
       const result: GenerationApiResponse = {
         jobId,
         status: "succeeded",
         provider: providerResult.provider,
         model: providerResult.model,
         resultUrl: `${options.config.publicBaseUrl}/api/v1/assets/${jobId}/${storedAsset.fileName}`,
-        summary: createGenerationSummary(input),
+        summary: directionName ? `${baseSummary} · ${directionName}` : baseSummary,
         durationMs: providerResult.durationMs,
+        strategy: analyzed ? "analyzed" : "direct",
+        directionId: directionId ?? null,
+        directionName,
       };
 
       request.log.info(
@@ -229,6 +349,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
           model: providerResult.model,
           providerRequestId: providerResult.providerRequestId,
           promptVersion: input.promptVersion,
+          strategy: result.strategy,
+          directionId: result.directionId,
           durationMs: providerResult.durationMs,
           status: result.status,
         },
@@ -287,7 +409,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       requestId: request.id,
       retryable,
     };
-    request.log.warn({ code, statusCode, retryable }, "generation request failed");
+    request.log.warn({ code, statusCode, retryable }, "API request failed");
     return reply.code(statusCode).send(response);
   });
 

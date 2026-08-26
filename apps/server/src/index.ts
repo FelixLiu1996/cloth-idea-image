@@ -1,9 +1,10 @@
 import { buildApp } from "./app";
-import { createGarmentProvider, loadServerConfig } from "./config";
+import { createGarmentAnalyzer, createGarmentProvider, loadServerConfig } from "./config";
 
 const config = loadServerConfig();
 const provider = createGarmentProvider();
-const app = await buildApp({ config, provider, logger: true });
+const analyzer = createGarmentAnalyzer();
+const app = await buildApp({ config, provider, analyzer, logger: true });
 
 try {
   await app.listen({ host: config.host, port: config.port });

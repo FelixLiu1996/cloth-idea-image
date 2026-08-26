@@ -1,8 +1,11 @@
 import { resolve } from "node:path";
 
 import {
+  AlibabaQwenProvider,
   AlibabaWanProvider,
+  type GarmentAnalysisProvider,
   type GarmentImageProvider,
+  UnconfiguredGarmentAnalysisProvider,
   UnconfiguredGarmentImageProvider,
 } from "@cloth-idea/model-providers";
 
@@ -53,6 +56,26 @@ export function createGarmentProvider(
   }
 
   return new AlibabaWanProvider({
+    apiKey,
+    baseUrl,
+    model,
+  });
+}
+
+export function createGarmentAnalyzer(
+  environment: NodeJS.ProcessEnv = process.env,
+): GarmentAnalysisProvider {
+  const model = environment.DASHSCOPE_VISION_MODEL ?? "qwen3-vl-plus";
+  const apiKey = environment.DASHSCOPE_API_KEY;
+  const baseUrl =
+    environment.DASHSCOPE_COMPATIBLE_BASE_URL ??
+    environment.DASHSCOPE_API_BASE_URL?.replace(/\/api\/v1\/?$/, "/compatible-mode/v1");
+
+  if (!apiKey || !baseUrl) {
+    return new UnconfiguredGarmentAnalysisProvider(model);
+  }
+
+  return new AlibabaQwenProvider({
     apiKey,
     baseUrl,
     model,

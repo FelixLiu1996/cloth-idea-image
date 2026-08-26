@@ -22,3 +22,4 @@
 - [0002：服务端统一模型 Provider](0002-server-side-model-provider.md)
 - [0003：H5 优先并使用匿名首版](0003-h5-first-anonymous-mvp.md)
 - [0004：使用 npm workspaces 与 Fastify 组织首版应用](0004-use-npm-workspaces-fastify.md)
+- [0005：采用证据门控的服装分析与确定性提示词编译](0005-use-evidence-gated-garment-analysis.md)

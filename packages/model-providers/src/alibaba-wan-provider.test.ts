@@ -1,19 +1,15 @@
-import type { GarmentGenerationInput } from "@cloth-idea/domain";
+import type { GarmentImageProviderInput } from "@cloth-idea/domain";
 import { describe, expect, it, vi } from "vitest";
 
 import { AlibabaWanProvider } from "./alibaba-wan-provider";
 
-const input: GarmentGenerationInput = {
-  mode: "quick-derivative",
-  preserveItems: ["格纹袖口"],
-  changeRequest: "改成复古工装夹克",
-  styleDirection: "复古铁路工装",
-  intensity: "medium",
+const input: GarmentImageProviderInput = {
   sourceImage: {
     bytes: new Uint8Array([1, 2, 3]),
     fileName: "coat.jpg",
     mimeType: "image/jpeg",
   },
+  prompt: "必须保留格纹袖口，改成复古工装夹克",
   outputCount: 1,
   promptVersion: "garment-redesign-v1",
 };

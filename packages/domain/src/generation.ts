@@ -21,7 +21,14 @@ export interface GarmentGenerationInput {
   readonly intensity: DesignIntensity;
   readonly sourceImage: SourceImageInput;
   readonly outputCount: 1;
-  readonly promptVersion: "garment-redesign-v1";
+  readonly promptVersion: "garment-redesign-v1" | "garment-analysis-v1";
+}
+
+export interface GarmentImageProviderInput {
+  readonly sourceImage: SourceImageInput;
+  readonly prompt: string;
+  readonly outputCount: 1;
+  readonly promptVersion: GarmentGenerationInput["promptVersion"];
 }
 
 export interface GeneratedImageAsset {
@@ -54,6 +61,9 @@ export interface GenerationApiResponse {
   readonly resultUrl: string;
   readonly summary: string;
   readonly durationMs: number;
+  readonly strategy: "direct" | "analyzed";
+  readonly directionId: string | null;
+  readonly directionName: string | null;
 }
 
 export interface ApiErrorResponse {

@@ -1,9 +1,8 @@
 import { performance } from "node:perf_hooks";
 
 import {
-  buildGarmentPrompt,
-  type GarmentGenerationInput,
   type GarmentGenerationResult,
+  type GarmentImageProviderInput,
   type ProviderUsage,
   type SupportedImageMimeType,
 } from "@cloth-idea/domain";
@@ -63,7 +62,7 @@ function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/$/, "");
 }
 
-function toDataUrl(input: GarmentGenerationInput["sourceImage"]): string {
+function toDataUrl(input: GarmentImageProviderInput["sourceImage"]): string {
   return `data:${input.mimeType};base64,${Buffer.from(input.bytes).toString("base64")}`;
 }
 
@@ -145,7 +144,7 @@ export class AlibabaWanProvider implements GarmentImageProvider {
     this.requestTimeoutMs = config.requestTimeoutMs ?? 120_000;
   }
 
-  async generateVariation(input: GarmentGenerationInput): Promise<GarmentGenerationResult> {
+  async generateVariation(input: GarmentImageProviderInput): Promise<GarmentGenerationResult> {
     const startedAt = performance.now();
     const response = await fetchWithTimeout(
       this.fetchImplementation,
@@ -162,10 +161,7 @@ export class AlibabaWanProvider implements GarmentImageProvider {
             messages: [
               {
                 role: "user",
-                content: [
-                  { text: buildGarmentPrompt(input) },
-                  { image: toDataUrl(input.sourceImage) },
-                ],
+                content: [{ text: input.prompt }, { image: toDataUrl(input.sourceImage) }],
               },
             ],
           },

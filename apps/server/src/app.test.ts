@@ -2,8 +2,15 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { GarmentGenerationResult, GenerationApiResponse } from "@cloth-idea/domain";
-import type { GarmentImageProvider } from "@cloth-idea/model-providers";
+import type {
+  GarmentAnalysis,
+  GarmentAnalysisApiResponse,
+  GarmentAnalysisProviderResult,
+  GarmentGenerationResult,
+  GarmentImageProviderInput,
+  GenerationApiResponse,
+} from "@cloth-idea/domain";
+import type { GarmentAnalysisProvider, GarmentImageProvider } from "@cloth-idea/model-providers";
 import { describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "./app";
@@ -15,30 +22,124 @@ class FakeProvider implements GarmentImageProvider {
   readonly provider = "alibaba-wan" as const;
   readonly model = "fake-wan";
   readonly configured = true;
-  readonly generateVariation = vi.fn(async (): Promise<GarmentGenerationResult> => ({
+  readonly generateVariation = vi.fn(
+    async (input: GarmentImageProviderInput): Promise<GarmentGenerationResult> => {
+      void input;
+      return {
+        provider: this.provider,
+        model: this.model,
+        providerRequestId: "provider-request-1",
+        durationMs: 1_250,
+        assets: [{ bytes: pngBytes, mimeType: "image/png" }],
+        usage: {
+          generatedImages: 1,
+          inputTokens: null,
+          outputTokens: null,
+          totalTokens: null,
+          size: "2K",
+        },
+      };
+    },
+  );
+}
+
+function fact(
+  value: string | string[] | null,
+  evidenceLevel: "visible" | "inferred" | "unknown" = "visible",
+  confidence = 0.9,
+) {
+  return { value, evidenceLevel, confidence, evidence: "集成测试证据" };
+}
+
+const analysis: GarmentAnalysis = {
+  schemaVersion: "garment-dna-v0.2",
+  visualFacts: {
+    category: fact("短夹克"),
+    silhouette: fact("宽松箱型"),
+    length: fact("腰上两厘米", "inferred"),
+    shoulder: fact("落肩"),
+    collar: fact("立领"),
+    closure: fact("单排扣"),
+    sleeve: fact("长袖"),
+    cuff: fact("黑白格纹翻折袖口"),
+    pockets: fact("左右对称贴袋", "inferred"),
+    frontPanels: fact("横向分割"),
+    backPanels: fact(null, "unknown", 0),
+    fabric: fact("深蓝牛仔", "inferred"),
+    color: fact("深蓝色"),
+    trims: fact("金属扣"),
+    craftsmanship: fact("浅色明线"),
+    presentation: fact("衣架商品图"),
+  },
+  userConstraints: {
+    preserve: ["黑白格纹袖口"],
+    modify: ["整体工装化"],
+    avoid: ["双侧对称贴袋"],
+  },
+  conflictsOrQuestions: ["后片不可见"],
+  designDirections: ["direction-1", "direction-2", "direction-3"].map((id, index) => ({
+    id,
+    name: `非对称工装${index + 1}`,
+    summary: "保持原款识别度的可生产工装改款",
+    changes: [
+      { area: "pockets" as const, instruction: "只设置一个左侧立体袋", reason: "建立视觉重心" },
+      { area: "panels" as const, instruction: "重组前片分割线", reason: "统一结构语言" },
+    ],
+    preserve: ["黑白格纹袖口"],
+    productionRisk: {
+      level: "low" as const,
+      newPatternPieces: ["立体袋片"],
+      newTrims: [],
+      newOperations: ["立体袋缝合"],
+      fitOrStructureRisks: [],
+      reason: "主体版型不变",
+    },
+    promptRequirements: {
+      positive: ["真实可打样"],
+      hardConstraints: ["口袋不得左右对称"],
+      negative: ["双侧对称贴袋"],
+    },
+  })),
+  recommendedDirectionId: "direction-1",
+  recommendationReason: "视觉变化和生产风险平衡",
+};
+
+class FakeAnalyzer implements GarmentAnalysisProvider {
+  readonly provider = "alibaba-qwen-vl" as const;
+  readonly model = "fake-qwen";
+  readonly configured = true;
+  readonly analyze = vi.fn(async (): Promise<GarmentAnalysisProviderResult> => ({
     provider: this.provider,
     model: this.model,
-    providerRequestId: "provider-request-1",
-    durationMs: 1_250,
-    assets: [{ bytes: pngBytes, mimeType: "image/png" }],
+    providerRequestId: "analysis-request-1",
+    durationMs: 2_500,
+    analysis,
     usage: {
-      generatedImages: 1,
-      inputTokens: null,
-      outputTokens: null,
-      totalTokens: null,
-      size: "2K",
+      generatedImages: 0,
+      inputTokens: 100,
+      outputTokens: 200,
+      totalTokens: 300,
+      size: null,
     },
   }));
 }
 
-async function createMultipartRequest(includeImage = true) {
+async function createMultipartRequest(
+  options: { includeImage?: boolean; analysisId?: string; directionId?: string } = {},
+) {
   const form = new FormData();
   form.append("mode", "quick-derivative");
   form.append("preserveItems", "黑白格纹袖口, 深蓝牛仔面料");
   form.append("changeRequest", "改成复古工装短夹克并重做整体结构");
   form.append("styleDirection", "九十年代日系复古工装");
   form.append("intensity", "medium");
-  if (includeImage) {
+  if (options.analysisId) {
+    form.append("analysisId", options.analysisId);
+  }
+  if (options.directionId) {
+    form.append("directionId", options.directionId);
+  }
+  if (options.includeImage !== false) {
     form.append("sourceImage", new Blob([pngBytes], { type: "image/png" }), "jacket.png");
   }
 
@@ -63,8 +164,9 @@ async function createTestContext() {
     maxUploadBytes: 10 * 1024 * 1024,
   };
   const provider = new FakeProvider();
-  const app = await buildApp({ config, provider });
-  return { app, assetDirectory, provider };
+  const analyzer = new FakeAnalyzer();
+  const app = await buildApp({ config, provider, analyzer });
+  return { app, assetDirectory, provider, analyzer };
 }
 
 describe("generation API", () => {
@@ -101,6 +203,8 @@ describe("generation API", () => {
         status: "succeeded",
         provider: "alibaba-wan",
         model: "fake-wan",
+        strategy: "direct",
+        directionId: null,
       });
       expect(result.summary).toContain("黑白格纹袖口");
       expect(context.provider.generateVariation).toHaveBeenCalledTimes(1);
@@ -133,7 +237,7 @@ describe("generation API", () => {
       const response = await context.app.inject({
         method: "POST",
         url: "/api/v1/generations",
-        ...(await createMultipartRequest(false)),
+        ...(await createMultipartRequest({ includeImage: false })),
       });
 
       expect(response.statusCode).toBe(400);
@@ -141,6 +245,57 @@ describe("generation API", () => {
         code: "IMAGE_REQUIRED",
         retryable: false,
       });
+    } finally {
+      await context.app.close();
+      await rm(context.assetDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("analyzes first and compiles only evidence-gated facts for the selected direction", async () => {
+    const context = await createTestContext();
+    try {
+      const analysisResponse = await context.app.inject({
+        method: "POST",
+        url: "/api/v1/analyses",
+        ...(await createMultipartRequest()),
+      });
+      expect(analysisResponse.statusCode).toBe(201);
+      const analyzed = analysisResponse.json<GarmentAnalysisApiResponse>();
+      expect(analyzed.evidenceSummary).toEqual({ accepted: 12, needsReview: 3, unknown: 1 });
+      expect(context.analyzer.analyze).toHaveBeenCalledTimes(1);
+
+      const repeatedAnalysisResponse = await context.app.inject({
+        method: "POST",
+        url: "/api/v1/analyses",
+        ...(await createMultipartRequest()),
+      });
+      expect(repeatedAnalysisResponse.statusCode).toBe(200);
+      expect(repeatedAnalysisResponse.json<GarmentAnalysisApiResponse>().analysisId).toBe(
+        analyzed.analysisId,
+      );
+      expect(context.analyzer.analyze).toHaveBeenCalledTimes(1);
+
+      const generationResponse = await context.app.inject({
+        method: "POST",
+        url: "/api/v1/generations",
+        ...(await createMultipartRequest({
+          analysisId: analyzed.analysisId,
+          directionId: "direction-1",
+        })),
+      });
+
+      expect(generationResponse.statusCode).toBe(201);
+      expect(generationResponse.json<GenerationApiResponse>()).toMatchObject({
+        strategy: "analyzed",
+        directionId: "direction-1",
+        directionName: "非对称工装1",
+      });
+      const providerInput = context.provider.generateVariation.mock.calls[0]?.[0];
+      expect(providerInput?.prompt).toContain("只设置一个左侧立体袋");
+      expect(providerInput?.prompt).toContain("口袋不得左右对称");
+      expect(providerInput?.prompt).not.toContain("腰上两厘米");
+      expect(providerInput?.prompt).not.toContain("- 口袋：左右对称贴袋");
+      expect(providerInput?.prompt).not.toContain("- 面料：深蓝牛仔");
     } finally {
       await context.app.close();
       await rm(context.assetDirectory, { recursive: true, force: true });

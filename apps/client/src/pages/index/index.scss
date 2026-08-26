@@ -31,6 +31,16 @@ $line: #dedbd2;
   display: block;
 }
 
+.analysis-meta,
+.direction-name,
+.direction-summary,
+.change-item,
+.risk-label,
+.review-title,
+.review-item {
+  display: block;
+}
+
 .eyebrow {
   margin-bottom: 20px;
   color: $accent;
@@ -292,6 +302,145 @@ $line: #dedbd2;
   color: $muted;
   font-size: 18px;
   text-align: center;
+}
+
+.text-button {
+  margin-top: 14px;
+  border: 0;
+  background: transparent;
+  color: $moss;
+  font-size: 22px;
+  font-weight: 650;
+  line-height: 1.5;
+}
+
+.text-button::after {
+  border: 0;
+}
+
+.text-button[disabled] {
+  color: #aaa79f;
+}
+
+.analysis-section {
+  padding-bottom: 26px;
+}
+
+.analysis-section .section-heading {
+  align-items: flex-start;
+}
+
+.analysis-meta {
+  margin-top: 10px;
+  color: $muted;
+  font-size: 18px;
+  line-height: 1.5;
+}
+
+.direction-list {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.direction-card {
+  padding: 25px;
+  border: 2px solid $line;
+  border-radius: 21px;
+  background: #fff;
+  transition: 160ms ease;
+}
+
+.direction-card--active {
+  border-color: $accent;
+  background: #fff8f2;
+  box-shadow: inset 0 0 0 1px $accent;
+}
+
+.direction-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.direction-name {
+  color: $ink;
+  font-size: 27px;
+  font-weight: 750;
+}
+
+.recommended-badge {
+  flex: 0 0 auto;
+  padding: 7px 13px;
+  border-radius: 999px;
+  background: $accent;
+  color: #fff;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.direction-summary {
+  margin-top: 11px;
+  color: $muted;
+  font-size: 21px;
+  line-height: 1.5;
+}
+
+.change-list {
+  margin-top: 17px;
+  padding: 15px 18px;
+  border-radius: 15px;
+  background: #f1efe8;
+}
+
+.change-item {
+  color: $ink;
+  font-size: 20px;
+  line-height: 1.65;
+}
+
+.risk-label {
+  margin-top: 16px;
+  font-size: 18px;
+  line-height: 1.5;
+}
+
+.risk-label--low {
+  color: #337048;
+}
+
+.risk-label--medium {
+  color: #9a621c;
+}
+
+.risk-label--high {
+  color: #a23e28;
+}
+
+.review-note {
+  margin: 22px 0;
+  padding: 20px 22px;
+  border: 1px solid #e5d6b6;
+  border-radius: 17px;
+  background: #fff9e8;
+}
+
+.review-title {
+  margin-bottom: 7px;
+  color: #765416;
+  font-size: 21px;
+  font-weight: 700;
+}
+
+.review-item {
+  color: #806a40;
+  font-size: 19px;
+  line-height: 1.6;
+}
+
+.analysis-section .generate-button {
+  margin-top: 28px;
 }
 
 .result-section {

@@ -17,12 +17,14 @@ Taro 客户端
         ▼
 业务 API / 任务服务
 ├── 上传校验与资源存储
-├── 设计方向与提示词
+├── 证据门控与设计方向
+├── 确定性 Prompt Compiler
 ├── 生图任务与幂等控制
 └── 结果访问
         │
         ▼
 Model Provider 层
+├── Alibaba Qwen VL Analysis Provider
 ├── Alibaba Wan Provider
 └── Volcengine Seedream Provider
 ```
@@ -98,18 +100,16 @@ interface GarmentImageProvider {
   readonly model: string;
   readonly configured: boolean;
 
-  generateVariation(input: GarmentGenerationInput): Promise<GarmentGenerationResult>;
+  generateVariation(input: GarmentImageProviderInput): Promise<GarmentGenerationResult>;
 }
 ```
 
-统一输入至少包括：
+生图 Provider 的统一输入包括：
 
-- 原图地址或受控文件引用。
-- 设计方向和用户追加指令。
-- 必须保留项。
-- 改款幅度。
-- 输出数量和尺寸。
-- 提示词版本与幂等键。
+- 原图受控文件引用。
+- 领域层已编译的最终提示词。
+- 输出数量。
+- 提示词版本。
 
 统一输出至少包括：
 
@@ -119,24 +119,36 @@ interface GarmentImageProvider {
 - 耗时和可获取的用量信息。
 - 标准化错误。
 
+视觉分析使用独立的 `GarmentAnalysisProvider`。它接收原图与用户简报，返回经过 Zod 校验的 `garment-dna-v0.2`；生图 Provider 不负责解释或重新组合这个结构。
+
 ## 7. 当前本地实现
 
-第一条纵向切片采用同步请求：
+当前默认纵向切片采用两次同步请求：
 
 ```text
-POST multipart
+POST /api/v1/analyses multipart
   → 参数与文件校验
-  → 构造版本化提示词
+  → Alibaba Qwen VL Provider
+  → garment-dna-v0.2 结构校验
+  → 可见事实证据门控与三个设计方向
+  → 用户选择一个方向
+  → 保存分析结构和原图 SHA-256（一小时有效）
+
+POST /api/v1/generations multipart + analysisId + directionId
+  → 验证同一原图 SHA-256
+  → 确定性 Prompt Compiler
   → Alibaba Wan Provider
   → 下载厂商临时结果
   → var/assets/{jobId}/result.{ext}
   → 返回稳定 GenerationApiResponse
 ```
 
-- 任务和幂等结果保存在服务进程内。
+- 分析和生成的任务与幂等结果保存在服务进程内。
 - 结果图保存在被 Git 忽略的本地目录。
 - 原图只在当前请求内存中传递，不在本地持久化。
-- `Idempotency-Key` 在同一服务进程内防止成功请求重复计费。
+- 分析记录只保存原图不可逆 SHA-256，不保存原图 Base64 或文件。
+- `Idempotency-Key` 分别防止分析和生图重复计费。
+- 不提供 `analysisId` 与 `directionId` 时仍走 `garment-redesign-v1` 直接生成，用于降级和 A/B 对照。
 - 当前实现只用于本地开发和真实效果验证，不用于公开部署。
 
 完整接口见 [API 契约](api-contract.md)。

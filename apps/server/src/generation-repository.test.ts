@@ -11,6 +11,9 @@ const result: GenerationApiResponse = {
   resultUrl: "http://example.test/result.png",
   summary: "快速衍生",
   durationMs: 100,
+  strategy: "direct",
+  directionId: null,
+  directionName: null,
 };
 
 describe("GenerationResultRepository", () => {

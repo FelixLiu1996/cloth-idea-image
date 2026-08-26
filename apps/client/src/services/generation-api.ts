@@ -1,6 +1,7 @@
 import type {
   ApiErrorResponse,
   DesignIntensity,
+  GarmentAnalysisApiResponse,
   GenerationApiResponse,
   GenerationMode,
 } from "@cloth-idea/domain";
@@ -13,6 +14,8 @@ export interface CreateGenerationRequest {
   readonly changeRequest: string;
   readonly styleDirection: string;
   readonly intensity: DesignIntensity;
+  readonly analysisId?: string;
+  readonly directionId?: string;
 }
 
 function createIdempotencyKey(): string {
@@ -30,23 +33,30 @@ export class GenerationApiError extends Error {
   }
 }
 
-export async function createGeneration(
+async function uploadGarmentRequest<TResponse>(
+  path: "/api/v1/analyses" | "/api/v1/generations",
   input: CreateGenerationRequest,
-): Promise<GenerationApiResponse> {
+): Promise<TResponse> {
+  const formData: Record<string, string> = {
+    mode: input.mode,
+    preserveItems: input.preserveItems,
+    changeRequest: input.changeRequest,
+    styleDirection: input.styleDirection,
+    intensity: input.intensity,
+  };
+  if (input.analysisId && input.directionId) {
+    formData.analysisId = input.analysisId;
+    formData.directionId = input.directionId;
+  }
+
   const response = await Taro.uploadFile({
-    url: `${API_BASE_URL}/api/v1/generations`,
+    url: `${API_BASE_URL}${path}`,
     filePath: input.imagePath,
     name: "sourceImage",
     header: {
       "Idempotency-Key": createIdempotencyKey(),
     },
-    formData: {
-      mode: input.mode,
-      preserveItems: input.preserveItems,
-      changeRequest: input.changeRequest,
-      styleDirection: input.styleDirection,
-      intensity: input.intensity,
-    },
+    formData,
   });
 
   let payload: unknown;
@@ -59,11 +69,23 @@ export async function createGeneration(
   if (response.statusCode < 200 || response.statusCode >= 300) {
     const error = payload as Partial<ApiErrorResponse>;
     throw new GenerationApiError(
-      error.message ?? "生成失败，请稍后重试。",
-      error.code ?? "GENERATION_FAILED",
+      error.message ?? "请求失败，请稍后重试。",
+      error.code ?? "GARMENT_REQUEST_FAILED",
       error.retryable ?? false,
     );
   }
 
-  return payload as GenerationApiResponse;
+  return payload as TResponse;
+}
+
+export async function analyzeGarment(
+  input: CreateGenerationRequest,
+): Promise<GarmentAnalysisApiResponse> {
+  return uploadGarmentRequest("/api/v1/analyses", input);
+}
+
+export async function createGeneration(
+  input: CreateGenerationRequest,
+): Promise<GenerationApiResponse> {
+  return uploadGarmentRequest("/api/v1/generations", input);
 }

@@ -1,11 +1,11 @@
-import type { GarmentGenerationInput, GarmentGenerationResult } from "@cloth-idea/domain";
+import type { GarmentGenerationResult, GarmentImageProviderInput } from "@cloth-idea/domain";
 
 export interface GarmentImageProvider {
   readonly provider: GarmentGenerationResult["provider"];
   readonly model: string;
   readonly configured: boolean;
 
-  generateVariation(input: GarmentGenerationInput): Promise<GarmentGenerationResult>;
+  generateVariation(input: GarmentImageProviderInput): Promise<GarmentGenerationResult>;
 }
 
 export type ProviderErrorCode =

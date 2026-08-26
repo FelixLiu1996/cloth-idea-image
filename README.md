@@ -4,13 +4,15 @@
 
 ## 当前阶段
 
-第一条本地可用的正式应用链路已经完成：
+证据门控的“先分析、选方向、再生图”本地链路已经完成：
 
 - 阿里云百炼 `wan2.7-image-pro` 参考图改款链路已验证成功。
-- 手机端 H5 已实现图片选择、两种业务模式、保留项、改款方向、幅度和结果展示。
+- 阿里云百炼 `qwen3-vl-plus` 已封装为服装视觉分析 Provider，输出 `garment-dna-v0.2`。
+- 手机端 H5 已实现图片选择、两种业务模式、三个设计方向、生产风险、方向选择和结果展示。
 - 同一套 Taro 客户端已经通过 H5 和微信小程序构建。
-- Fastify 服务端已实现受控上传、参数校验、幂等、万相调用、结果转存和稳定错误响应。
-- 领域规则、Provider 和服务端路由已有自动化测试。
+- Fastify 服务端已实现受控上传、分析/生成幂等、原图哈希匹配、万相调用、结果转存和稳定错误响应。
+- 领域层只允许高置信度可见事实进入确定性提示词，并保留直接生成路径用于降级和 A/B。
+- 领域规则、Provider 和服务端路由共有13项自动化测试。
 - 火山方舟 Seedream 调用脚本已完成，账号仍需开通目标模型。
 
 最新进度以 [当前状态](docs/current-status.md) 为准。
@@ -33,7 +35,8 @@
 - 后续平台：微信小程序
 - 服务端：Node.js + TypeScript
 - 模型层：统一 Provider 接口
-- 首发模型：阿里云百炼万相
+- 视觉分析：阿里云百炼 Qwen VL
+- 首发生图：阿里云百炼万相
 - 候选模型：火山方舟 Seedream
 
 架构说明见 [系统架构](docs/architecture.md)。
@@ -57,7 +60,7 @@
 运行环境需要 Node.js 20.17 或更高版本。
 
 1. 将 `.env.example` 复制为 `.env.local`。
-2. 填写 `DASHSCOPE_API_KEY`、`DASHSCOPE_API_BASE_URL` 和模型名。
+2. 填写 `DASHSCOPE_API_KEY`、`DASHSCOPE_API_BASE_URL` 和模型名。若未填写 `DASHSCOPE_COMPATIBLE_BASE_URL`，服务端会根据以 `/api/v1` 结尾的百炼地址推导 `/compatible-mode/v1`。
 3. 安装依赖并分别启动 API 与 H5：
 
 ```bash
