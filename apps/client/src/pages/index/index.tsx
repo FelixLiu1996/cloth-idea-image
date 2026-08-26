@@ -229,7 +229,7 @@ export default function Index() {
 
   async function refineCurrentResult() {
     const instruction = revisionInstruction.trim();
-    if (!activeResult || instruction.length < 2 || busy || modelRequestInFlight.current) {
+    if (!activeResult || !image || instruction.length < 2 || busy || modelRequestInFlight.current) {
       return;
     }
 
@@ -239,6 +239,7 @@ export default function Index() {
     try {
       const nextResult = await refineGeneration({
         parentJobId: activeResult.jobId,
+        imagePath: image.path,
         instruction,
       });
       setResults((current) =>

@@ -7,8 +7,8 @@ export interface StoredGenerationRecord {
   readonly basePrompt: string;
   readonly baseSummary: string;
   readonly baseRequestFingerprint: string;
+  readonly sourceImageSha256: string;
   readonly revisionInstructions: readonly string[];
-  readonly iterationAnchorJobId: string;
 }
 
 interface IdempotentExecution {

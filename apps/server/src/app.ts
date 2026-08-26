@@ -213,6 +213,7 @@ interface RunGenerationOptions {
   readonly basePrompt: string;
   readonly baseSummary: string;
   readonly baseRequestFingerprint: string;
+  readonly sourceImageSha256: string;
   readonly revisionInstructions: readonly string[];
   readonly strategy: GenerationApiResponse["strategy"];
   readonly directionId: string | null;
@@ -220,7 +221,6 @@ interface RunGenerationOptions {
   readonly operation: GenerationOperation;
   readonly parentJobId: string | null;
   readonly revisionInstruction: string | null;
-  readonly iterationAnchorJobId?: string;
 }
 
 export async function buildApp(options: BuildAppOptions): Promise<FastifyInstance> {
@@ -271,8 +271,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       basePrompt: input.basePrompt,
       baseSummary: input.baseSummary,
       baseRequestFingerprint: input.baseRequestFingerprint,
+      sourceImageSha256: input.sourceImageSha256,
       revisionInstructions: input.revisionInstructions,
-      iterationAnchorJobId: input.iterationAnchorJobId ?? jobId,
     });
 
     request.log.info(
@@ -280,8 +280,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
         jobId,
         parentJobId: input.parentJobId,
         operation: input.operation,
-        sourceStrategy: input.iterationAnchorJobId ? "stable-anchor-rebase" : "uploaded-image",
-        iterationAnchorJobId: input.iterationAnchorJobId ?? jobId,
+        sourceStrategy: input.operation === "refine" ? "original-image-rebuild" : "uploaded-image",
         provider: providerResult.provider,
         model: providerResult.model,
         providerRequestId: providerResult.providerRequestId,
@@ -461,6 +460,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
           basePrompt: prompt,
           baseSummary: resultSummary,
           baseRequestFingerprint,
+          sourceImageSha256: sha256(sourceImage.bytes),
           revisionInstructions: [],
           strategy: analyzed ? "analyzed" : "direct",
           directionId: directionId ?? null,
@@ -477,10 +477,11 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     return reply.code(execution.reused ? 200 : 201).send(execution.result);
   });
 
-  app.post<{ Params: { jobId: string }; Body: unknown }>(
+  app.post<{ Params: { jobId: string } }>(
     "/api/v1/generations/:jobId/refinements",
     async (request, reply) => {
-      const parsedBody = refinementFieldsSchema.safeParse(request.body);
+      const { fields, sourceImage } = await readMultipartRequest(request);
+      const parsedBody = refinementFieldsSchema.safeParse(fields);
       if (!parsedBody.success) {
         throw new RequestError(
           400,
@@ -504,27 +505,12 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       if (!parentAsset) {
         throw new RequestError(410, "PARENT_ASSET_EXPIRED", "上一张结果图片已过期，无法继续修改。");
       }
-
-      const stableAnchorRecord = repository.get(parent.iterationAnchorJobId);
-      if (!stableAnchorRecord) {
+      const sourceImageFingerprint = sha256(sourceImage.bytes);
+      if (sourceImageFingerprint !== parent.sourceImageSha256) {
         throw new RequestError(
-          410,
-          "ITERATION_ANCHOR_EXPIRED",
-          "当前分支的稳定基准图已过期，无法安全地继续修改。",
-        );
-      }
-      const stableAnchorAsset =
-        stableAnchorRecord.response.jobId === parent.response.jobId
-          ? parentAsset
-          : await assetStore.readResult(
-              stableAnchorRecord.response.jobId,
-              stableAnchorRecord.assetFileName,
-            );
-      if (!stableAnchorAsset) {
-        throw new RequestError(
-          410,
-          "ITERATION_ANCHOR_EXPIRED",
-          "当前分支的稳定基准图已过期，无法安全地继续修改。",
+          409,
+          "REFINEMENT_IMAGE_MISMATCH",
+          "当前原图与生成分支不一致，无法继续修改。",
         );
       }
 
@@ -532,17 +518,13 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       const prompt = compileGarmentIterationPrompt({
         basePrompt: parent.basePrompt,
         revisionInstructions,
-        usesStableAnchorImage: true,
+        usesOriginalSourceImage: true,
       });
-      const sourceImage: SourceImageInput = {
-        bytes: stableAnchorAsset.bytes,
-        fileName: stableAnchorRecord.assetFileName,
-        mimeType: stableAnchorAsset.mimeType,
-      };
       const requestFingerprint = createRequestFingerprint({
         type: "refinement",
         parentJobId: parent.response.jobId,
         instruction: parsedBody.data.instruction,
+        sourceImageSha256: sourceImageFingerprint,
       });
       const execution = await repository.executeOnce(
         readIdempotencyKey(request),
@@ -556,6 +538,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
             basePrompt: parent.basePrompt,
             baseSummary: parent.baseSummary,
             baseRequestFingerprint: parent.baseRequestFingerprint,
+            sourceImageSha256: parent.sourceImageSha256,
             revisionInstructions,
             strategy: parent.response.strategy,
             directionId: parent.response.directionId,
@@ -563,7 +546,6 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
             operation: "refine",
             parentJobId: parent.response.jobId,
             revisionInstruction: parsedBody.data.instruction,
-            iterationAnchorJobId: parent.iterationAnchorJobId,
           }),
       );
 

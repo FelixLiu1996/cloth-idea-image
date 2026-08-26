@@ -23,6 +23,7 @@ export interface CreateGenerationRequest {
 
 export interface RefineGenerationRequest {
   readonly parentJobId: string;
+  readonly imagePath: string;
   readonly instruction: string;
 }
 
@@ -106,19 +107,27 @@ export async function createGeneration(
 export async function refineGeneration(
   input: RefineGenerationRequest,
 ): Promise<GenerationApiResponse> {
-  const response = await Taro.request<GenerationApiResponse | ApiErrorResponse>({
+  const response = await Taro.uploadFile({
     url: `${API_BASE_URL}/api/v1/generations/${input.parentJobId}/refinements`,
-    method: "POST",
-    data: { instruction: input.instruction },
+    filePath: input.imagePath,
+    name: "sourceImage",
+    withCredentials: false,
     timeout: MODEL_REQUEST_TIMEOUT_MS,
     header: {
-      "Content-Type": "application/json",
       "Idempotency-Key": createIdempotencyKey(),
     },
+    formData: { instruction: input.instruction },
   });
 
+  let payload: unknown;
+  try {
+    payload = JSON.parse(response.data);
+  } catch {
+    throw new GenerationApiError("服务返回了无法识别的结果。", "BAD_RESPONSE", true);
+  }
+
   if (response.statusCode < 200 || response.statusCode >= 300) {
-    const error = response.data as Partial<ApiErrorResponse>;
+    const error = payload as Partial<ApiErrorResponse>;
     throw new GenerationApiError(
       error.message ?? "继续修改失败，请稍后重试。",
       error.code ?? "GARMENT_REFINEMENT_FAILED",
@@ -126,5 +135,5 @@ export async function refineGeneration(
     );
   }
 
-  return response.data as GenerationApiResponse;
+  return payload as GenerationApiResponse;
 }

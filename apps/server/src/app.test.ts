@@ -165,6 +165,25 @@ async function createMultipartRequest(
   };
 }
 
+async function createRefinementRequest(options: {
+  instruction: string;
+  idempotencyKey: string;
+  sourceBytes?: Uint8Array;
+}) {
+  const form = new FormData();
+  const uploadBytes = new Uint8Array(Array.from(options.sourceBytes ?? pngBytes));
+  form.append("instruction", options.instruction);
+  form.append("sourceImage", new Blob([uploadBytes.buffer], { type: "image/png" }), "jacket.png");
+  const request = new Request("http://localhost", { method: "POST", body: form });
+  return {
+    payload: Buffer.from(await request.arrayBuffer()),
+    headers: {
+      "content-type": request.headers.get("content-type") ?? "multipart/form-data",
+      "idempotency-key": options.idempotencyKey,
+    },
+  };
+}
+
 async function createTestContext() {
   const assetDirectory = await mkdtemp(join(tmpdir(), "cloth-idea-server-"));
   const config: ServerConfig = {
@@ -335,8 +354,10 @@ describe("generation API", () => {
       const refinementResponse = await context.app.inject({
         method: "POST",
         url: `/api/v1/generations/${regenerated.jobId}/refinements`,
-        headers: { "idempotency-key": "refinement-request" },
-        payload: { instruction: "袖型再宽松一点，但保留格纹袖口" },
+        ...(await createRefinementRequest({
+          idempotencyKey: "refinement-request",
+          instruction: "袖型再宽松一点，但保留格纹袖口",
+        })),
       });
       expect(refinementResponse.statusCode).toBe(201);
       const refined = refinementResponse.json<GenerationApiResponse>();
@@ -347,7 +368,10 @@ describe("generation API", () => {
         directionId: "direction-1",
       });
       const refinementProviderInput = context.provider.generateVariation.mock.calls[2]?.[0];
-      expect(refinementProviderInput?.sourceImage.fileName).toBe("result.png");
+      expect(refinementProviderInput?.sourceImage.fileName).toBe("jacket.png");
+      expect(Buffer.from(refinementProviderInput?.sourceImage.bytes ?? [])).toEqual(
+        Buffer.from(pngBytes),
+      );
       expect(refinementProviderInput?.referenceImages).toBeUndefined();
       expect(refinementProviderInput?.promptVersion).toBe("garment-iteration-v1");
       expect(refinementProviderInput?.prompt).toContain("口袋不得左右对称");
@@ -356,8 +380,10 @@ describe("generation API", () => {
       const repeatedRefinementResponse = await context.app.inject({
         method: "POST",
         url: `/api/v1/generations/${regenerated.jobId}/refinements`,
-        headers: { "idempotency-key": "refinement-request" },
-        payload: { instruction: "袖型再宽松一点，但保留格纹袖口" },
+        ...(await createRefinementRequest({
+          idempotencyKey: "refinement-request",
+          instruction: "袖型再宽松一点，但保留格纹袖口",
+        })),
       });
       expect(repeatedRefinementResponse.statusCode).toBe(200);
       expect(repeatedRefinementResponse.json<GenerationApiResponse>().jobId).toBe(refined.jobId);
@@ -368,16 +394,20 @@ describe("generation API", () => {
         const nextRefinementResponse = await context.app.inject({
           method: "POST",
           url: `/api/v1/generations/${lastRefined.jobId}/refinements`,
-          headers: { "idempotency-key": `refinement-request-${index}` },
-          payload: { instruction: `第 ${index} 次继续调整局部结构` },
+          ...(await createRefinementRequest({
+            idempotencyKey: `refinement-request-${index}`,
+            instruction: `第 ${index} 次继续调整局部结构`,
+          })),
         });
         expect(nextRefinementResponse.statusCode).toBe(201);
         lastRefined = nextRefinementResponse.json<GenerationApiResponse>();
         if (index === 2) {
           const repeatedEditProviderInput = context.provider.generateVariation.mock.calls[3]?.[0];
           expect(repeatedEditProviderInput?.referenceImages).toBeUndefined();
-          expect(repeatedEditProviderInput?.sourceImage.bytes.at(-1)).toBe(2);
-          expect(repeatedEditProviderInput?.prompt).toContain("本分支首次生成的稳定基准版");
+          expect(Buffer.from(repeatedEditProviderInput?.sourceImage.bytes ?? [])).toEqual(
+            Buffer.from(pngBytes),
+          );
+          expect(repeatedEditProviderInput?.prompt).toContain("最初上传的商品原图");
           expect(repeatedEditProviderInput?.prompt).toContain("不得只执行最后一条");
         }
       }
@@ -385,12 +415,30 @@ describe("generation API", () => {
       const overLimitResponse = await context.app.inject({
         method: "POST",
         url: `/api/v1/generations/${lastRefined.jobId}/refinements`,
-        headers: { "idempotency-key": "refinement-over-limit" },
-        payload: { instruction: "第六次修改不应触发模型" },
+        ...(await createRefinementRequest({
+          idempotencyKey: "refinement-over-limit",
+          instruction: "第六次修改不应触发模型",
+        })),
       });
       expect(overLimitResponse.statusCode).toBe(409);
       expect(overLimitResponse.json()).toMatchObject({
         code: "REFINEMENT_LIMIT_REACHED",
+        retryable: false,
+      });
+      expect(context.provider.generateVariation).toHaveBeenCalledTimes(7);
+
+      const mismatchedRefinementResponse = await context.app.inject({
+        method: "POST",
+        url: `/api/v1/generations/${regenerated.jobId}/refinements`,
+        ...(await createRefinementRequest({
+          idempotencyKey: "mismatched-refinement-image",
+          instruction: "这张不同的原图不应进入模型",
+          sourceBytes: new Uint8Array([...pngBytes, 99]),
+        })),
+      });
+      expect(mismatchedRefinementResponse.statusCode).toBe(409);
+      expect(mismatchedRefinementResponse.json()).toMatchObject({
+        code: "REFINEMENT_IMAGE_MISMATCH",
         retryable: false,
       });
       expect(context.provider.generateVariation).toHaveBeenCalledTimes(7);

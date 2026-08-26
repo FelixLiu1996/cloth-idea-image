@@ -63,7 +63,7 @@ export interface CompileAnalyzedPromptInput {
 export interface CompileGarmentIterationPromptInput {
   readonly basePrompt: string;
   readonly revisionInstructions: readonly string[];
-  readonly usesStableAnchorImage?: boolean;
+  readonly usesOriginalSourceImage?: boolean;
 }
 
 export function compileAnalyzedGarmentPrompt(input: CompileAnalyzedPromptInput): string {
@@ -120,10 +120,10 @@ export function compileGarmentIterationPrompt(input: CompileGarmentIterationProm
   }
 
   const latestInstruction = revisionInstructions.at(-1);
-  const sourceContext = input.usesStableAnchorImage
-    ? "当前输入图片是本分支首次生成的稳定基准版，不是新的原款，也不是上一轮可能已经退化的结果。请从这张稳定基准版出发，在一次生成中完整执行下面所有累计修改；不得只执行最后一条。"
+  const sourceContext = input.usesOriginalSourceImage
+    ? "当前输入图片是最初上传的商品原图，不是上一轮生成结果。请从原图重新构建已经选定的基础设计方向，并在同一次生成中完整执行下面所有累计修改；不得只执行最后一条。"
     : "当前输入图片是需要继续修改的上一版结果，不是新的原款。";
-  const preservationTarget = input.usesStableAnchorImage ? "稳定基准版" : "上一版";
+  const preservationTarget = input.usesOriginalSourceImage ? "原始任务约束" : "上一版";
 
   return [
     `这是局部编辑任务。本轮重点：${latestInstruction}。只修改累计指令直接涉及的区域；没有被要求改变的结构、面料、颜色、白平衡和构图必须保持${preservationTarget}，各条累计修改不得互相覆盖。`,

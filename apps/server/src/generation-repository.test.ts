@@ -74,8 +74,8 @@ describe("GenerationResultRepository", () => {
       basePrompt: "base prompt",
       baseSummary: "快速衍生",
       baseRequestFingerprint: "request",
+      sourceImageSha256: "source-image-sha256",
       revisionInstructions: [],
-      iterationAnchorJobId: result.jobId,
     });
 
     expect(repository.get(result.jobId)?.response).toEqual(result);

@@ -90,17 +90,16 @@
 
 `POST /api/v1/generations/:jobId/refinements`
 
-请求类型为 `application/json`：
+请求类型为 `multipart/form-data`：
 
-```json
-{
-  "instruction": "袖型再宽松一点，门襟改成隐藏拉链，其余保持不变"
-}
-```
+| 字段          | 类型 | 必填 | 说明                                       |
+| ------------- | ---- | ---- | ------------------------------------------ |
+| `sourceImage` | 文件 | 是   | 最初上传的商品原图，必须与当前生成分支一致 |
+| `instruction` | 文本 | 是   | 本轮修改要求，2至500字符                   |
 
-`instruction` 为2至500字符。服务端先确认父结果仍然存在，再读取本分支首次成功结果作为稳定生成底图；以父任务保存的基础 Prompt 为起点，使用 `garment-iteration-v1` 确定性累计全部修改要求，并把本轮指令放在提示词前部。每轮都从稳定首版一次性重算全部累计修改，不把上一轮模型输出继续作为像素编辑输入，从而减少多代生成图的锐化、颗粒和偏色累积。原始保留项、证据门事实、选中方向和禁止项继续生效。单条父子分支最多连续修改5次，超过时返回 `REFINEMENT_LIMIT_REACHED`，避免提示词和付费调用无边界增长。
+服务端先确认父结果仍然存在，再用保存的 SHA-256 校验重新上传的原图。以父任务保存的基础 Prompt 为起点，使用 `garment-iteration-v1` 确定性累计全部修改要求，并把本轮指令放在提示词前部。每轮都从最初商品图、选中方向和全部累计修改一次性重建结果，不把任何模型生成图继续作为像素编辑输入。原始保留项、证据门事实、选中方向和禁止项继续生效。单条父子分支最多连续修改5次，超过时返回 `REFINEMENT_LIMIT_REACHED`，避免提示词和付费调用无边界增长。
 
-成功响应仍为 `GenerationApiResponse`，其中 `operation` 为 `refine`，`parentJobId` 指向用户继续修改时看到的上一版，`revisionInstruction` 为本轮指令。父记录不存在时返回 `PARENT_GENERATION_NOT_FOUND`；父图片已经清理时返回 `PARENT_ASSET_EXPIRED`；稳定基准记录或图片已清理时返回 `ITERATION_ANCHOR_EXPIRED`，不会在缺少稳定生成底图时静默继续。
+成功响应仍为 `GenerationApiResponse`，其中 `operation` 为 `refine`，`parentJobId` 指向用户继续修改时看到的上一版，`revisionInstruction` 为本轮指令。父记录不存在时返回 `PARENT_GENERATION_NOT_FOUND`；父图片已经清理时返回 `PARENT_ASSET_EXPIRED`；上传图与分支原图不一致时返回 `REFINEMENT_IMAGE_MISMATCH`。
 
 ## 读取结果图
 
@@ -126,7 +125,7 @@
 - `400`：缺图或表单参数错误。
 - `404`：分析已过期或方向不存在。
 - `409`：当前原图与分析时不一致、父任务不匹配，或同一幂等键被用于不同请求。
-- `410`：继续修改所需的父结果图片或稳定基准图已经过期。
+- `410`：继续修改所需的父结果图片已经过期。
 - `413`：图片超过10 MB。
 - `415`：图片类型不支持。
 - `422`：模型拒绝输入。

@@ -96,7 +96,7 @@ interface PlatformAdapter {
 - 调用分析和生图 Model Provider。
 - 控制超时和进程内幂等，不自动重复付费调用。
 - 下载厂商临时结果并转存本地 `var/assets/`。
-- 保存进程内父子生成关系，并支持以上一版结果为参考图继续修改。
+- 保存进程内父子生成关系，并支持从校验后的原图与累计指令重建继续修改结果。
 - 返回稳定的业务错误码。
 
 目标服务端还应负责：
@@ -158,10 +158,11 @@ POST /api/v1/generations multipart + analysisId + directionId
   → var/assets/{jobId}/result.{ext}
   → 返回稳定 GenerationApiResponse
 
-POST /api/v1/generations/{jobId}/refinements JSON
-  → 读取父结果图、分支稳定基准图和原始基础 Prompt
+POST /api/v1/generations/{jobId}/refinements multipart
+  → 重新上传原始商品图并校验分支 SHA-256
+  → 确认父结果仍存在并读取原始基础 Prompt
   → 本轮指令前置并确定性追加累计修改指令
-  → 每轮都以分支首次结果为生成底图，一次性重算全部累计修改
+  → 每轮都以原始商品图为生成底图，一次性重算选中方向和全部累计修改
   → 使用 garment-iteration-v1 调用当前生图 Provider
   → 保存新结果及 parentJobId
 ```
@@ -172,7 +173,7 @@ POST /api/v1/generations/{jobId}/refinements JSON
 - 分析记录只保存原图不可逆 SHA-256，不保存原图 Base64 或文件。
 - `Idempotency-Key` 分别防止分析和生图重复计费。
 - 生成幂等记录同时保存请求指纹；同一幂等键用于不同请求时返回冲突，不复用错误结果。
-- 同方向再生成仍上传并使用原图；继续修改保留父子记录和累计指令，但模型输入固定为本分支首次成功结果。父结果用于确认用户当前版本仍存在和建立历史关系，不再作为下一代像素输入。
+- 同方向再生成和继续修改都重新上传原图；继续修改先校验原图 SHA-256，再保留父子记录和累计指令。父结果用于确认用户当前版本仍存在和建立历史关系，不再作为下一代像素输入。
 - 结果父子关系与基础 Prompt 仅保存在服务进程内；客户端历史仅保存在当前页面状态中。
 - 不提供 `analysisId` 与 `directionId` 时仍走 `garment-redesign-v1` 直接生成，用于降级和 A/B 对照。
 - 当前实现只用于本地开发和真实效果验证，不用于公开部署。
