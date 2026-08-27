@@ -300,6 +300,14 @@ export default function Index() {
         <Text className="hero-copy">
           先识别可信的原款结构，再选择设计方向，最后生成一张效果图。
         </Text>
+        {process.env.TARO_ENV === "weapp" && (
+          <Button
+            className="cloud-diagnostics-entry"
+            onClick={() => Taro.navigateTo({ url: "/pages/cloud-diagnostics/index" })}
+          >
+            云开发诊断
+          </Button>
+        )}
       </View>
 
       {trialAccessRequired && (
