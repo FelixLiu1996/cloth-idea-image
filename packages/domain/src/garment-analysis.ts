@@ -162,6 +162,7 @@ export interface GarmentAnalysisProviderResult {
   readonly model: string;
   readonly providerRequestId: string | null;
   readonly durationMs: number;
+  readonly attemptCount: 1 | 2;
   readonly usage: ProviderUsage;
   readonly analysis: GarmentAnalysis;
 }

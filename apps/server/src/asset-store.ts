@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 
 import type { GeneratedImageAsset, SupportedImageMimeType } from "@cloth-idea/domain";
@@ -63,5 +63,36 @@ export class LocalAssetStore {
       }
       throw error;
     }
+  }
+
+  async pruneExpiredResults(retentionMs: number, now = Date.now()): Promise<number> {
+    if (retentionMs <= 0) {
+      return 0;
+    }
+
+    let entries;
+    try {
+      entries = await readdir(this.rootDirectory, { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return 0;
+      }
+      throw error;
+    }
+
+    let removed = 0;
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !safeJobIdPattern.test(entry.name)) {
+        continue;
+      }
+      const directory = join(this.rootDirectory, entry.name);
+      const metadata = await stat(directory);
+      if (metadata.mtimeMs > now - retentionMs) {
+        continue;
+      }
+      await rm(directory, { recursive: true, force: true });
+      removed += 1;
+    }
+    return removed;
   }
 }

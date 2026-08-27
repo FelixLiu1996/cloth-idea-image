@@ -3,7 +3,7 @@ import { basename, extname, resolve } from "node:path";
 
 const apiKey = process.env.DASHSCOPE_API_KEY;
 const baseUrl = process.env.DASHSCOPE_API_BASE_URL?.replace(/\/$/, "");
-const model = process.env.DASHSCOPE_IMAGE_MODEL || "wan2.7-image-pro";
+const model = process.env.DASHSCOPE_WAN_MODEL || "wan2.7-image-pro";
 const imageArg = process.argv[2];
 const promptArg = process.argv[3] || "prompts/retro-workwear.txt";
 

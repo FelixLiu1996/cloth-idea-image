@@ -25,3 +25,5 @@ ADR 的状态表示决策状态，不是功能完成状态。`Accepted` 只代�
 - [0003：H5 优先并使用匿名首版](0003-h5-first-anonymous-mvp.md)
 - [0004：使用 npm workspaces 与 Fastify 组织首版应用](0004-use-npm-workspaces-fastify.md)
 - [0005：采用证据门控的服装分析与确定性提示词编译](0005-use-evidence-gated-garment-analysis.md)
+- [0006：使用可轮询的异步生图任务](0006-use-pollable-generation-jobs.md)
+- [0007：先交付单进程受控试用版](0007-use-single-process-controlled-trial.md)

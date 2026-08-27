@@ -60,6 +60,12 @@ export interface CompileAnalyzedPromptInput {
   readonly direction: DesignDirection;
 }
 
+export interface CompileGarmentIterationPromptInput {
+  readonly basePrompt: string;
+  readonly revisionInstructions: readonly string[];
+  readonly usesOriginalSourceImage?: boolean;
+}
+
 export function compileAnalyzedGarmentPrompt(input: CompileAnalyzedPromptInput): string {
   const gate = applyEvidenceGate(input.analysis.visualFacts);
   const acceptedFacts = gate.accepted
@@ -104,5 +110,29 @@ export function compileAnalyzedGarmentPrompt(input: CompileAnalyzedPromptInput):
     "只把可信视觉事实作为原款描述。对 inferred、unknown 或低置信度区域，不得自行补充具体结构；除用户明确要求修改外，应尽量保持输入图原貌。",
     "所有新增结构必须符合真实裁片、缝制、受力和穿着逻辑，清晰呈现面料、缝线、口袋厚度和部件连接关系。",
     `禁止出现：${negatives.join("、")}。`,
+  ].join("\n\n");
+}
+
+export function compileGarmentIterationPrompt(input: CompileGarmentIterationPromptInput): string {
+  const revisionInstructions = unique(input.revisionInstructions);
+  if (revisionInstructions.length === 0) {
+    throw new Error("继续修改至少需要一条有效指令。");
+  }
+
+  const latestInstruction = revisionInstructions.at(-1);
+  const sourceContext = input.usesOriginalSourceImage
+    ? "当前输入图片是最初上传的商品原图，不是上一轮生成结果。请从原图重新构建已经选定的基础设计方向，并在同一次生成中完整执行下面所有累计修改；不得只执行最后一条。"
+    : "当前输入图片是需要继续修改的上一版结果，不是新的原款。";
+  const preservationTarget = input.usesOriginalSourceImage ? "原始任务约束" : "上一版";
+
+  return [
+    `这是局部编辑任务。本轮重点：${latestInstruction}。只修改累计指令直接涉及的区域；没有被要求改变的结构、面料、颜色、白平衡和构图必须保持${preservationTarget}，各条累计修改不得互相覆盖。`,
+    sourceContext,
+    `累计追加修改（按顺序全部执行）：\n${revisionInstructions
+      .map((instruction, index) => `${index + 1}. ${instruction}`)
+      .join("\n")}`,
+    "追加修改的优先级低于必须保留项和结构硬约束。若追加要求与硬约束冲突，以硬约束为准，不得为了执行局部修改破坏服装的可生产性。",
+    "以下是原始任务约束，只用于继续校验硬约束和禁止项，不代表要恢复成最初上传的原图：",
+    input.basePrompt.trim(),
   ].join("\n\n");
 }

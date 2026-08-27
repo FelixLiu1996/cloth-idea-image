@@ -27,3 +27,16 @@ export async function selectGarmentImage(): Promise<SelectedImage | null> {
     throw error;
   }
 }
+
+export async function saveGeneratedImage(imageUrl: string): Promise<void> {
+  const downloaded = await Taro.downloadFile({
+    url: imageUrl,
+    withCredentials: false,
+    timeout: 60_000,
+  });
+  if (downloaded.statusCode < 200 || downloaded.statusCode >= 300) {
+    throw new Error("结果图片下载失败，请稍后重试。");
+  }
+
+  await Taro.saveImageToPhotosAlbum({ filePath: downloaded.tempFilePath });
+}

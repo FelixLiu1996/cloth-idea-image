@@ -38,12 +38,16 @@ export class GarmentProviderError extends Error {
 }
 
 export class UnconfiguredGarmentImageProvider implements GarmentImageProvider {
-  readonly provider = "alibaba-wan" as const;
+  readonly provider: GarmentGenerationResult["provider"];
   readonly model: string;
   readonly configured = false;
 
-  constructor(model = "wan2.7-image-pro") {
+  constructor(
+    model = "wan2.7-image-pro",
+    provider: GarmentGenerationResult["provider"] = "alibaba-wan",
+  ) {
     this.model = model;
+    this.provider = provider;
   }
 
   async generateVariation(): Promise<never> {

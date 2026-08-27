@@ -7,6 +7,16 @@ export type DesignIntensity = (typeof designIntensities)[number];
 export const supportedImageMimeTypes = ["image/jpeg", "image/png", "image/webp"] as const;
 export type SupportedImageMimeType = (typeof supportedImageMimeTypes)[number];
 
+export const generationPromptVersions = [
+  "garment-redesign-v1",
+  "garment-analysis-v1",
+  "garment-iteration-v1",
+] as const;
+export type GenerationPromptVersion = (typeof generationPromptVersions)[number];
+
+export const generationOperations = ["initial", "regenerate", "refine"] as const;
+export type GenerationOperation = (typeof generationOperations)[number];
+
 export interface SourceImageInput {
   readonly bytes: Uint8Array;
   readonly fileName: string;
@@ -21,11 +31,12 @@ export interface GarmentGenerationInput {
   readonly intensity: DesignIntensity;
   readonly sourceImage: SourceImageInput;
   readonly outputCount: 1;
-  readonly promptVersion: "garment-redesign-v1" | "garment-analysis-v1";
+  readonly promptVersion: GenerationPromptVersion;
 }
 
 export interface GarmentImageProviderInput {
   readonly sourceImage: SourceImageInput;
+  readonly referenceImages?: readonly SourceImageInput[];
   readonly prompt: string;
   readonly outputCount: 1;
   readonly promptVersion: GarmentGenerationInput["promptVersion"];
@@ -45,7 +56,7 @@ export interface ProviderUsage {
 }
 
 export interface GarmentGenerationResult {
-  readonly provider: "alibaba-wan" | "volcengine-seedream";
+  readonly provider: "alibaba-wan" | "alibaba-qwen-image" | "volcengine-seedream";
   readonly model: string;
   readonly providerRequestId: string | null;
   readonly durationMs: number;
@@ -64,6 +75,10 @@ export interface GenerationApiResponse {
   readonly strategy: "direct" | "analyzed";
   readonly directionId: string | null;
   readonly directionName: string | null;
+  readonly operation: GenerationOperation;
+  readonly parentJobId: string | null;
+  readonly revisionInstruction: string | null;
+  readonly createdAt: string;
 }
 
 export interface ApiErrorResponse {
@@ -72,6 +87,28 @@ export interface ApiErrorResponse {
   readonly requestId: string;
   readonly retryable: boolean;
 }
+
+export const generationJobPendingStatuses = ["queued", "generating"] as const;
+export type GenerationJobPendingStatus = (typeof generationJobPendingStatuses)[number];
+
+export interface GenerationJobPendingResponse {
+  readonly jobId: string;
+  readonly status: GenerationJobPendingStatus;
+  readonly statusUrl: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface GenerationJobFailedResponse {
+  readonly jobId: string;
+  readonly status: "failed";
+  readonly error: ApiErrorResponse;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export type GenerationJobStatusResponse =
+  GenerationJobPendingResponse | GenerationApiResponse | GenerationJobFailedResponse;
 
 const modeInstructions: Record<GenerationMode, string> = {
   inspiration:

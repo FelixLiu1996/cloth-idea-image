@@ -1,10 +1,11 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 
 import cors from "@fastify/cors";
 import multipart, { type MultipartFile } from "@fastify/multipart";
 import {
   buildGarmentPrompt,
   compileAnalyzedGarmentPrompt,
+  compileGarmentIterationPrompt,
   createGenerationSummary,
   designIntensities,
   findDesignDirection,
@@ -14,6 +15,9 @@ import {
   type GarmentAnalysisBrief,
   type GarmentGenerationInput,
   type GenerationApiResponse,
+  type GenerationJobStatusResponse,
+  type GenerationOperation,
+  type GenerationPromptVersion,
   type SourceImageInput,
   type SupportedImageMimeType,
 } from "@cloth-idea/domain";
@@ -30,7 +34,12 @@ import { z } from "zod";
 import { LocalAssetStore } from "./asset-store";
 import type { ServerConfig } from "./config";
 import { GarmentAnalysisRepository } from "./garment-analysis-repository";
-import { GenerationResultRepository } from "./generation-repository";
+import {
+  GenerationResultRepository,
+  IdempotencyKeyConflictError,
+  type StoredGenerationRecord,
+} from "./generation-repository";
+import { TrialUsageLimitError, TrialUsagePolicy } from "./trial-usage-policy";
 
 const generationFieldsSchema = z.object({
   mode: z.enum(generationModes),
@@ -56,6 +65,7 @@ const createGenerationFieldsSchema = generationFieldsSchema
       .string()
       .regex(/^direction-[1-3]$/)
       .optional(),
+    parentJobId: z.string().uuid().optional(),
   })
   .superRefine((fields, context) => {
     if ((fields.analysisId === undefined) !== (fields.directionId === undefined)) {
@@ -66,6 +76,11 @@ const createGenerationFieldsSchema = generationFieldsSchema
       });
     }
   });
+
+const refinementFieldsSchema = z.object({
+  instruction: z.string().trim().min(2, "请填写需要继续修改的内容。").max(500),
+});
+const maxRefinementDepth = 5;
 
 interface BuildAppOptions {
   readonly config: ServerConfig;
@@ -141,6 +156,59 @@ function providerStatus(code: ProviderErrorCode): number {
   }
 }
 
+interface NormalizedError {
+  readonly statusCode: number;
+  readonly code: string;
+  readonly message: string;
+  readonly retryable: boolean;
+  readonly providerValidationIssues:
+    readonly { readonly code: string; readonly path: string }[] | undefined;
+}
+
+function normalizeError(error: unknown): NormalizedError {
+  let statusCode = 500;
+  let code = "INTERNAL_ERROR";
+  let message = "服务暂时不可用，请稍后重试。";
+  let retryable = true;
+
+  if (error instanceof RequestError) {
+    statusCode = error.statusCode;
+    code = error.code;
+    message = error.message;
+    retryable = error.retryable;
+  } else if (error instanceof IdempotencyKeyConflictError) {
+    statusCode = 409;
+    code = "IDEMPOTENCY_KEY_REUSED";
+    message = error.message;
+    retryable = false;
+  } else if (error instanceof TrialUsageLimitError) {
+    statusCode = error.statusCode;
+    code = error.code;
+    message = error.message;
+    retryable = error.retryable;
+  } else if (error instanceof GarmentProviderError) {
+    statusCode = providerStatus(error.code);
+    code = error.code;
+    message = error.message;
+    retryable = error.retryable;
+  } else if (hasErrorCode(error) && error.code === "FST_REQ_FILE_TOO_LARGE") {
+    statusCode = 413;
+    code = "IMAGE_TOO_LARGE";
+    message = "图片不能超过 10 MB。";
+    retryable = false;
+  }
+
+  const providerValidationIssues =
+    error instanceof GarmentProviderError && error.cause instanceof z.ZodError
+      ? error.cause.issues.map((issue) => ({
+          code: issue.code,
+          path: issue.path.join("."),
+        }))
+      : undefined;
+
+  return { statusCode, code, message, retryable, providerValidationIssues };
+}
+
 async function fileToSourceImage(file: MultipartFile): Promise<SourceImageInput> {
   const bytes = await file.toBuffer();
   if (bytes.length === 0) {
@@ -188,12 +256,169 @@ function readIdempotencyKey(request: FastifyRequest): string | undefined {
   return Array.isArray(header) ? header[0] : header;
 }
 
+function sha256(value: Uint8Array | string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function createRequestFingerprint(value: object): string {
+  return sha256(JSON.stringify(value));
+}
+
+interface RunGenerationOptions {
+  readonly sourceImage: SourceImageInput;
+  readonly prompt: string;
+  readonly promptVersion: GenerationPromptVersion;
+  readonly summary: string;
+  readonly basePrompt: string;
+  readonly baseSummary: string;
+  readonly baseRequestFingerprint: string;
+  readonly sourceImageSha256: string;
+  readonly revisionInstructions: readonly string[];
+  readonly strategy: GenerationApiResponse["strategy"];
+  readonly directionId: string | null;
+  readonly directionName: string | null;
+  readonly operation: GenerationOperation;
+  readonly parentJobId: string | null;
+  readonly revisionInstruction: string | null;
+}
+
 export async function buildApp(options: BuildAppOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: options.logger ?? false });
   const assetStore = options.assetStore ?? new LocalAssetStore(options.config.assetDirectory);
   const repository = options.repository ?? new GenerationResultRepository();
   const analysisRepository = options.analysisRepository ?? new GarmentAnalysisRepository();
   const analyzer = options.analyzer ?? new UnconfiguredGarmentAnalysisProvider();
+  const trialUsagePolicy = new TrialUsagePolicy({
+    dailyAnalysisLimit: options.config.trialDailyAnalysisLimit,
+    dailyGenerationLimit: options.config.trialDailyGenerationLimit,
+    maxConcurrentModelRequests: options.config.trialMaxConcurrentModelRequests,
+    generationMinIntervalMs: options.config.trialGenerationMinIntervalMs,
+  });
+
+  function assertTrialAccess(request: FastifyRequest): void {
+    const expectedCode = options.config.trialAccessCode;
+    if (!expectedCode) {
+      return;
+    }
+    const header = request.headers["x-trial-access-code"];
+    const receivedCode = (Array.isArray(header) ? header[0] : header)?.trim() ?? "";
+    const expectedDigest = createHash("sha256").update(expectedCode).digest();
+    const receivedDigest = createHash("sha256").update(receivedCode).digest();
+    if (!timingSafeEqual(expectedDigest, receivedDigest)) {
+      throw new RequestError(401, "AUTH_TRIAL_ACCESS_DENIED", "试用访问码不正确。", false);
+    }
+  }
+
+  async function runGeneration(
+    request: FastifyRequest,
+    jobId: string,
+    createdAt: string,
+    input: RunGenerationOptions,
+  ): Promise<StoredGenerationRecord> {
+    const providerResult = await options.provider.generateVariation({
+      sourceImage: input.sourceImage,
+      prompt: input.prompt,
+      outputCount: 1,
+      promptVersion: input.promptVersion,
+    });
+    const firstAsset = providerResult.assets[0];
+    if (!firstAsset) {
+      throw new GarmentProviderError("PROVIDER_BAD_RESPONSE", "生图结果中没有图片。");
+    }
+
+    const storedAsset = await assetStore.saveResult(jobId, firstAsset);
+    const result: GenerationApiResponse = {
+      jobId,
+      status: "succeeded",
+      provider: providerResult.provider,
+      model: providerResult.model,
+      resultUrl: `${options.config.publicBaseUrl}/api/v1/assets/${jobId}/${storedAsset.fileName}`,
+      summary: input.summary,
+      durationMs: providerResult.durationMs,
+      strategy: input.strategy,
+      directionId: input.directionId,
+      directionName: input.directionName,
+      operation: input.operation,
+      parentJobId: input.parentJobId,
+      revisionInstruction: input.revisionInstruction,
+      createdAt,
+    };
+
+    const record: StoredGenerationRecord = {
+      response: result,
+      assetFileName: storedAsset.fileName,
+      assetMimeType: storedAsset.mimeType,
+      basePrompt: input.basePrompt,
+      baseSummary: input.baseSummary,
+      baseRequestFingerprint: input.baseRequestFingerprint,
+      sourceImageSha256: input.sourceImageSha256,
+      revisionInstructions: input.revisionInstructions,
+    };
+
+    request.log.info(
+      {
+        jobId,
+        parentJobId: input.parentJobId,
+        operation: input.operation,
+        sourceStrategy: input.operation === "refine" ? "original-image-rebuild" : "uploaded-image",
+        provider: providerResult.provider,
+        model: providerResult.model,
+        providerRequestId: providerResult.providerRequestId,
+        promptVersion: input.promptVersion,
+        strategy: result.strategy,
+        directionId: result.directionId,
+        durationMs: providerResult.durationMs,
+        usage: providerResult.usage,
+        status: result.status,
+      },
+      "generation completed",
+    );
+    return record;
+  }
+
+  function enqueueGeneration(
+    request: FastifyRequest,
+    requestFingerprint: string,
+    input: RunGenerationOptions,
+  ): { readonly job: GenerationJobStatusResponse; readonly reused: boolean } {
+    const jobId = randomUUID();
+    const createdAt = new Date().toISOString();
+    const execution = repository.enqueueOnce({
+      jobId,
+      statusUrl: `${options.config.publicBaseUrl}/api/v1/generations/${jobId}`,
+      createdAt,
+      idempotencyKey: readIdempotencyKey(request),
+      requestFingerprint,
+      onAccepted: () => trialUsagePolicy.reserveGeneration(),
+      operation: () =>
+        trialUsagePolicy.runGeneration(() => runGeneration(request, jobId, createdAt, input)),
+      mapError: (error) => {
+        const normalized = normalizeError(error);
+        request.log.warn(
+          {
+            jobId,
+            code: normalized.code,
+            retryable: normalized.retryable,
+            providerValidationIssues: normalized.providerValidationIssues,
+          },
+          "generation job failed",
+        );
+        return {
+          code: normalized.code,
+          message: normalized.message,
+          requestId: request.id,
+          retryable: normalized.retryable,
+        };
+      },
+    });
+
+    if (execution.reused) {
+      request.log.info({ jobId: execution.job.jobId }, "idempotent generation job reused");
+    } else {
+      request.log.info({ jobId, status: "queued" }, "generation job queued");
+    }
+    return execution;
+  }
 
   await app.register(cors, {
     origin: options.config.clientOrigin === "*" ? true : options.config.clientOrigin,
@@ -225,9 +450,17 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     outputCount: 1,
     analysisEnabled: analyzer.configured,
     analysisSchemaVersion: "garment-dna-v0.2",
+    resultIterationEnabled: true,
+    generationJobsAsync: true,
+    trialAccessRequired: options.config.trialAccessCode !== null,
+    trialDailyAnalysisLimit: options.config.trialDailyAnalysisLimit,
+    trialDailyGenerationLimit: options.config.trialDailyGenerationLimit,
+    assetRetentionHours: Math.round(options.config.assetRetentionMs / (60 * 60 * 1_000)),
+    maxRefinementDepth,
   }));
 
   app.post("/api/v1/analyses", async (request, reply) => {
+    assertTrialAccess(request);
     const { fields, sourceImage } = await readMultipartRequest(request);
     const parsedFields = generationFieldsSchema.safeParse(fields);
     if (!parsedFields.success) {
@@ -241,32 +474,37 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     const brief: GarmentAnalysisBrief = parsedFields.data;
     const execution = await analysisRepository.executeOnce(
       readIdempotencyKey(request),
-      async () => {
-        const providerResult = await analyzer.analyze({
-          sourceImage,
-          brief,
-          schemaVersion: "garment-dna-v0.2",
-        });
-        const result = analysisRepository.save(sourceImage, providerResult);
-        request.log.info(
-          {
-            analysisId: result.analysisId,
-            provider: providerResult.provider,
-            model: providerResult.model,
-            providerRequestId: providerResult.providerRequestId,
-            schemaVersion: providerResult.analysis.schemaVersion,
-            durationMs: providerResult.durationMs,
-          },
-          "garment analysis completed",
-        );
-        return result;
-      },
+      () => trialUsagePolicy.reserveAnalysis(),
+      () =>
+        trialUsagePolicy.runAnalysis(async () => {
+          const providerResult = await analyzer.analyze({
+            sourceImage,
+            brief,
+            schemaVersion: "garment-dna-v0.2",
+          });
+          const result = analysisRepository.save(sourceImage, providerResult);
+          request.log.info(
+            {
+              analysisId: result.analysisId,
+              provider: providerResult.provider,
+              model: providerResult.model,
+              providerRequestId: providerResult.providerRequestId,
+              schemaVersion: providerResult.analysis.schemaVersion,
+              durationMs: providerResult.durationMs,
+              attemptCount: providerResult.attemptCount,
+              usage: providerResult.usage,
+            },
+            "garment analysis completed",
+          );
+          return result;
+        }),
     );
 
     return reply.code(execution.reused ? 200 : 201).send(execution.result);
   });
 
   app.post("/api/v1/generations", async (request, reply) => {
+    assertTrialAccess(request);
     const { fields, sourceImage } = await readMultipartRequest(request);
     const parsedFields = createGenerationFieldsSchema.safeParse(fields);
     if (!parsedFields.success) {
@@ -277,7 +515,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       );
     }
 
-    const { analysisId, directionId, ...generationFields } = parsedFields.data;
+    const { analysisId, directionId, parentJobId, ...generationFields } = parsedFields.data;
     const analyzed = analysisId !== undefined && directionId !== undefined;
     const input: GarmentGenerationInput = {
       ...generationFields,
@@ -314,56 +552,139 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       prompt = buildGarmentPrompt(input);
     }
 
-    const execution = await repository.executeOnce(readIdempotencyKey(request), async () => {
-      const providerResult = await options.provider.generateVariation({
+    const baseSummary = createGenerationSummary(input);
+    const resultSummary = directionName ? `${baseSummary} · ${directionName}` : baseSummary;
+    const baseRequestFingerprint = createRequestFingerprint({
+      type: "generation-base",
+      sourceImageSha256: sha256(sourceImage.bytes),
+      generationFields,
+      analysisId: analysisId ?? null,
+      directionId: directionId ?? null,
+    });
+    let operation: GenerationOperation = "initial";
+    if (parentJobId) {
+      const parent = repository.get(parentJobId);
+      if (!parent) {
+        throw new RequestError(404, "PARENT_GENERATION_NOT_FOUND", "上一张生成结果不存在。");
+      }
+      if (parent.baseRequestFingerprint !== baseRequestFingerprint) {
+        throw new RequestError(
+          409,
+          "PARENT_GENERATION_MISMATCH",
+          "上一张结果与当前原图或设计方向不一致，无法作为重新生成的父任务。",
+        );
+      }
+      operation = "regenerate";
+    }
+
+    const execution = enqueueGeneration(
+      request,
+      createRequestFingerprint({
+        type: "generation",
+        baseRequestFingerprint,
+        parentJobId: parentJobId ?? null,
+      }),
+      {
         sourceImage,
         prompt,
-        outputCount: 1,
         promptVersion: input.promptVersion,
-      });
-      const firstAsset = providerResult.assets[0];
-      if (!firstAsset) {
-        throw new GarmentProviderError("PROVIDER_BAD_RESPONSE", "生图结果中没有图片。");
-      }
-
-      const jobId = randomUUID();
-      const storedAsset = await assetStore.saveResult(jobId, firstAsset);
-      const baseSummary = createGenerationSummary(input);
-      const result: GenerationApiResponse = {
-        jobId,
-        status: "succeeded",
-        provider: providerResult.provider,
-        model: providerResult.model,
-        resultUrl: `${options.config.publicBaseUrl}/api/v1/assets/${jobId}/${storedAsset.fileName}`,
-        summary: directionName ? `${baseSummary} · ${directionName}` : baseSummary,
-        durationMs: providerResult.durationMs,
+        summary: resultSummary,
+        basePrompt: prompt,
+        baseSummary: resultSummary,
+        baseRequestFingerprint,
+        sourceImageSha256: sha256(sourceImage.bytes),
+        revisionInstructions: [],
         strategy: analyzed ? "analyzed" : "direct",
         directionId: directionId ?? null,
         directionName,
-      };
+        operation,
+        parentJobId: parentJobId ?? null,
+        revisionInstruction: null,
+      },
+    );
 
-      request.log.info(
-        {
-          jobId,
-          provider: providerResult.provider,
-          model: providerResult.model,
-          providerRequestId: providerResult.providerRequestId,
-          promptVersion: input.promptVersion,
-          strategy: result.strategy,
-          directionId: result.directionId,
-          durationMs: providerResult.durationMs,
-          status: result.status,
-        },
-        "generation completed",
-      );
-      return result;
-    });
-
-    if (execution.reused) {
-      request.log.info({ jobId: execution.result.jobId }, "idempotent generation result reused");
-    }
-    return reply.code(execution.reused ? 200 : 201).send(execution.result);
+    return reply.code(execution.reused ? 200 : 202).send(execution.job);
   });
+
+  app.get<{ Params: { jobId: string } }>("/api/v1/generations/:jobId", async (request, reply) => {
+    const job = repository.getJob(request.params.jobId);
+    if (!job) {
+      throw new RequestError(404, "GENERATION_JOB_NOT_FOUND", "生成任务不存在或已经过期。");
+    }
+    return reply.header("Cache-Control", "no-store").send(job);
+  });
+
+  app.post<{ Params: { jobId: string } }>(
+    "/api/v1/generations/:jobId/refinements",
+    async (request, reply) => {
+      assertTrialAccess(request);
+      const { fields, sourceImage } = await readMultipartRequest(request);
+      const parsedBody = refinementFieldsSchema.safeParse(fields);
+      if (!parsedBody.success) {
+        throw new RequestError(
+          400,
+          "INVALID_REFINEMENT_REQUEST",
+          parsedBody.error.issues[0]?.message ?? "继续修改参数不完整。",
+        );
+      }
+
+      const parent = repository.get(request.params.jobId);
+      if (!parent) {
+        throw new RequestError(404, "PARENT_GENERATION_NOT_FOUND", "上一张生成结果不存在。");
+      }
+      if (parent.revisionInstructions.length >= maxRefinementDepth) {
+        throw new RequestError(
+          409,
+          "REFINEMENT_LIMIT_REACHED",
+          `当前分支最多连续修改 ${maxRefinementDepth} 次，请从原图或其他方向重新生成。`,
+        );
+      }
+      const parentAsset = await assetStore.readResult(parent.response.jobId, parent.assetFileName);
+      if (!parentAsset) {
+        throw new RequestError(410, "PARENT_ASSET_EXPIRED", "上一张结果图片已过期，无法继续修改。");
+      }
+      const sourceImageFingerprint = sha256(sourceImage.bytes);
+      if (sourceImageFingerprint !== parent.sourceImageSha256) {
+        throw new RequestError(
+          409,
+          "REFINEMENT_IMAGE_MISMATCH",
+          "当前原图与生成分支不一致，无法继续修改。",
+        );
+      }
+
+      const revisionInstructions = [...parent.revisionInstructions, parsedBody.data.instruction];
+      const prompt = compileGarmentIterationPrompt({
+        basePrompt: parent.basePrompt,
+        revisionInstructions,
+        usesOriginalSourceImage: true,
+      });
+      const requestFingerprint = createRequestFingerprint({
+        type: "refinement",
+        parentJobId: parent.response.jobId,
+        instruction: parsedBody.data.instruction,
+        sourceImageSha256: sourceImageFingerprint,
+      });
+      const execution = enqueueGeneration(request, requestFingerprint, {
+        sourceImage,
+        prompt,
+        promptVersion: "garment-iteration-v1",
+        summary: `${parent.baseSummary} · 继续修改：${parsedBody.data.instruction}`,
+        basePrompt: parent.basePrompt,
+        baseSummary: parent.baseSummary,
+        baseRequestFingerprint: parent.baseRequestFingerprint,
+        sourceImageSha256: parent.sourceImageSha256,
+        revisionInstructions,
+        strategy: parent.response.strategy,
+        directionId: parent.response.directionId,
+        directionName: parent.response.directionName,
+        operation: "refine",
+        parentJobId: parent.response.jobId,
+        revisionInstruction: parsedBody.data.instruction,
+      });
+
+      return reply.code(execution.reused ? 200 : 202).send(execution.job);
+    },
+  );
 
   app.get<{ Params: { jobId: string; fileName: string } }>(
     "/api/v1/assets/:jobId/:fileName",
@@ -381,37 +702,44 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   );
 
   app.setErrorHandler((error, request, reply) => {
-    let statusCode = 500;
-    let code = "INTERNAL_ERROR";
-    let message = "服务暂时不可用，请稍后重试。";
-    let retryable = true;
-
-    if (error instanceof RequestError) {
-      statusCode = error.statusCode;
-      code = error.code;
-      message = error.message;
-      retryable = error.retryable;
-    } else if (error instanceof GarmentProviderError) {
-      statusCode = providerStatus(error.code);
-      code = error.code;
-      message = error.message;
-      retryable = error.retryable;
-    } else if (hasErrorCode(error) && error.code === "FST_REQ_FILE_TOO_LARGE") {
-      statusCode = 413;
-      code = "IMAGE_TOO_LARGE";
-      message = "图片不能超过 10 MB。";
-      retryable = false;
-    }
+    const normalized = normalizeError(error);
 
     const response: ApiErrorResponse = {
-      code,
-      message,
+      code: normalized.code,
+      message: normalized.message,
       requestId: request.id,
-      retryable,
+      retryable: normalized.retryable,
     };
-    request.log.warn({ code, statusCode, retryable }, "API request failed");
-    return reply.code(statusCode).send(response);
+    request.log.warn(
+      {
+        code: normalized.code,
+        statusCode: normalized.statusCode,
+        retryable: normalized.retryable,
+        providerValidationIssues: normalized.providerValidationIssues,
+      },
+      "API request failed",
+    );
+    return reply.code(normalized.statusCode).send(response);
   });
+
+  if (options.config.assetRetentionMs > 0) {
+    const pruneExpiredAssets = async () => {
+      try {
+        const removed = await assetStore.pruneExpiredResults(options.config.assetRetentionMs);
+        if (removed > 0) {
+          app.log.info({ removed }, "expired generated assets removed");
+        }
+      } catch (error) {
+        app.log.error({ error }, "generated asset cleanup failed");
+      }
+    };
+    await pruneExpiredAssets();
+    const cleanupTimer = setInterval(pruneExpiredAssets, options.config.assetCleanupIntervalMs);
+    cleanupTimer.unref();
+    app.addHook("onClose", async () => {
+      clearInterval(cleanupTimer);
+    });
+  }
 
   return app;
 }

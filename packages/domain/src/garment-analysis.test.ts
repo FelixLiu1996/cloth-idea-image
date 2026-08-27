@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { applyEvidenceGate, garmentAnalysisSchema, type GarmentAnalysis } from "./garment-analysis";
-import { compileAnalyzedGarmentPrompt } from "./prompt-compiler";
+import { compileAnalyzedGarmentPrompt, compileGarmentIterationPrompt } from "./prompt-compiler";
 
 function fact(
   value: string | string[] | null,
@@ -107,5 +107,35 @@ describe("compileAnalyzedGarmentPrompt", () => {
     expect(prompt).not.toContain("左胸翻盖袋");
     expect(prompt).not.toContain("深靛蓝牛仔");
     expect(prompt).toContain("inferred、unknown 或低置信度区域");
+  });
+
+  it("keeps the deterministic base prompt while adding cumulative revision instructions", () => {
+    const prompt = compileGarmentIterationPrompt({
+      basePrompt: "必须完整保留：格纹袖口。\n禁止出现：品牌标志。",
+      revisionInstructions: ["袖型再宽松一点", "门襟改成隐藏拉链", "袖型再宽松一点"],
+    });
+
+    expect(prompt).toContain("必须完整保留：格纹袖口");
+    expect(prompt).toContain("禁止出现：品牌标志");
+    expect(prompt).toContain("1. 袖型再宽松一点");
+    expect(prompt).toContain("2. 门襟改成隐藏拉链");
+    expect(prompt).toContain("本轮重点：门襟改成隐藏拉链");
+    expect(prompt.match(/袖型再宽松一点/g)).toHaveLength(1);
+    expect(prompt.indexOf("本轮重点：门襟改成隐藏拉链")).toBeLessThan(
+      prompt.indexOf("必须完整保留：格纹袖口"),
+    );
+  });
+
+  it("rebuilds cumulative edits from the original uploaded image", () => {
+    const prompt = compileGarmentIterationPrompt({
+      basePrompt: "必须完整保留：白色绗缝。",
+      revisionInstructions: ["袖口增加收束", "增加一个斜向拉链袋"],
+      usesOriginalSourceImage: true,
+    });
+
+    expect(prompt).toContain("当前输入图片是最初上传的商品原图");
+    expect(prompt).toContain("重新构建已经选定的基础设计方向");
+    expect(prompt).toContain("一次生成中完整执行下面所有累计修改");
+    expect(prompt).toContain("不得只执行最后一条");
   });
 });

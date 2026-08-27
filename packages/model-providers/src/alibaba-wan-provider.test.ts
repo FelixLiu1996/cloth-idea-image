@@ -49,7 +49,16 @@ describe("AlibabaWanProvider", () => {
       fetchImplementation,
     });
 
-    const result = await provider.generateVariation(input);
+    const result = await provider.generateVariation({
+      ...input,
+      referenceImages: [
+        {
+          bytes: new Uint8Array([4, 5, 6]),
+          fileName: "stable-anchor.png",
+          mimeType: "image/png",
+        },
+      ],
+    });
     const generationRequest = fetchImplementation.mock.calls[0];
     const requestBody = JSON.parse(String(generationRequest?.[1]?.body)) as {
       input: { messages: Array<{ content: Array<{ text?: string; image?: string }> }> };
@@ -61,7 +70,8 @@ describe("AlibabaWanProvider", () => {
     );
     expect(requestBody.parameters.n).toBe(1);
     expect(requestBody.input.messages[0]?.content[0]?.text).toContain("格纹袖口");
-    expect(requestBody.input.messages[0]?.content[1]?.image).toMatch(/^data:image\/jpeg;base64,/);
+    expect(requestBody.input.messages[0]?.content[1]?.image).toMatch(/^data:image\/png;base64,/);
+    expect(requestBody.input.messages[0]?.content[2]?.image).toMatch(/^data:image\/jpeg;base64,/);
     expect(result.providerRequestId).toBe("request-123");
     expect(result.assets[0]?.bytes).toEqual(new Uint8Array([9, 8, 7]));
     expect(result.usage.size).toBe("1883*2226");
