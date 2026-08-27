@@ -15,6 +15,7 @@ import {
   type GarmentAnalysisBrief,
   type GarmentGenerationInput,
   type GenerationApiResponse,
+  type GenerationJobStatusResponse,
   type GenerationOperation,
   type GenerationPromptVersion,
   type SourceImageInput,
@@ -33,7 +34,11 @@ import { z } from "zod";
 import { LocalAssetStore } from "./asset-store";
 import type { ServerConfig } from "./config";
 import { GarmentAnalysisRepository } from "./garment-analysis-repository";
-import { GenerationResultRepository, IdempotencyKeyConflictError } from "./generation-repository";
+import {
+  GenerationResultRepository,
+  IdempotencyKeyConflictError,
+  type StoredGenerationRecord,
+} from "./generation-repository";
 
 const generationFieldsSchema = z.object({
   mode: z.enum(generationModes),
@@ -150,6 +155,54 @@ function providerStatus(code: ProviderErrorCode): number {
   }
 }
 
+interface NormalizedError {
+  readonly statusCode: number;
+  readonly code: string;
+  readonly message: string;
+  readonly retryable: boolean;
+  readonly providerValidationIssues:
+    readonly { readonly code: string; readonly path: string }[] | undefined;
+}
+
+function normalizeError(error: unknown): NormalizedError {
+  let statusCode = 500;
+  let code = "INTERNAL_ERROR";
+  let message = "服务暂时不可用，请稍后重试。";
+  let retryable = true;
+
+  if (error instanceof RequestError) {
+    statusCode = error.statusCode;
+    code = error.code;
+    message = error.message;
+    retryable = error.retryable;
+  } else if (error instanceof IdempotencyKeyConflictError) {
+    statusCode = 409;
+    code = "IDEMPOTENCY_KEY_REUSED";
+    message = error.message;
+    retryable = false;
+  } else if (error instanceof GarmentProviderError) {
+    statusCode = providerStatus(error.code);
+    code = error.code;
+    message = error.message;
+    retryable = error.retryable;
+  } else if (hasErrorCode(error) && error.code === "FST_REQ_FILE_TOO_LARGE") {
+    statusCode = 413;
+    code = "IMAGE_TOO_LARGE";
+    message = "图片不能超过 10 MB。";
+    retryable = false;
+  }
+
+  const providerValidationIssues =
+    error instanceof GarmentProviderError && error.cause instanceof z.ZodError
+      ? error.cause.issues.map((issue) => ({
+          code: issue.code,
+          path: issue.path.join("."),
+        }))
+      : undefined;
+
+  return { statusCode, code, message, retryable, providerValidationIssues };
+}
+
 async function fileToSourceImage(file: MultipartFile): Promise<SourceImageInput> {
   const bytes = await file.toBuffer();
   if (bytes.length === 0) {
@@ -232,8 +285,10 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
 
   async function runGeneration(
     request: FastifyRequest,
+    jobId: string,
+    createdAt: string,
     input: RunGenerationOptions,
-  ): Promise<GenerationApiResponse> {
+  ): Promise<StoredGenerationRecord> {
     const providerResult = await options.provider.generateVariation({
       sourceImage: input.sourceImage,
       prompt: input.prompt,
@@ -245,7 +300,6 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       throw new GarmentProviderError("PROVIDER_BAD_RESPONSE", "生图结果中没有图片。");
     }
 
-    const jobId = randomUUID();
     const storedAsset = await assetStore.saveResult(jobId, firstAsset);
     const result: GenerationApiResponse = {
       jobId,
@@ -261,10 +315,10 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       operation: input.operation,
       parentJobId: input.parentJobId,
       revisionInstruction: input.revisionInstruction,
-      createdAt: new Date().toISOString(),
+      createdAt,
     };
 
-    repository.save({
+    const record: StoredGenerationRecord = {
       response: result,
       assetFileName: storedAsset.fileName,
       assetMimeType: storedAsset.mimeType,
@@ -273,7 +327,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       baseRequestFingerprint: input.baseRequestFingerprint,
       sourceImageSha256: input.sourceImageSha256,
       revisionInstructions: input.revisionInstructions,
-    });
+    };
 
     request.log.info(
       {
@@ -293,7 +347,49 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       },
       "generation completed",
     );
-    return result;
+    return record;
+  }
+
+  function enqueueGeneration(
+    request: FastifyRequest,
+    requestFingerprint: string,
+    input: RunGenerationOptions,
+  ): { readonly job: GenerationJobStatusResponse; readonly reused: boolean } {
+    const jobId = randomUUID();
+    const createdAt = new Date().toISOString();
+    const execution = repository.enqueueOnce({
+      jobId,
+      statusUrl: `${options.config.publicBaseUrl}/api/v1/generations/${jobId}`,
+      createdAt,
+      idempotencyKey: readIdempotencyKey(request),
+      requestFingerprint,
+      operation: () => runGeneration(request, jobId, createdAt, input),
+      mapError: (error) => {
+        const normalized = normalizeError(error);
+        request.log.warn(
+          {
+            jobId,
+            code: normalized.code,
+            retryable: normalized.retryable,
+            providerValidationIssues: normalized.providerValidationIssues,
+          },
+          "generation job failed",
+        );
+        return {
+          code: normalized.code,
+          message: normalized.message,
+          requestId: request.id,
+          retryable: normalized.retryable,
+        };
+      },
+    });
+
+    if (execution.reused) {
+      request.log.info({ jobId: execution.job.jobId }, "idempotent generation job reused");
+    } else {
+      request.log.info({ jobId, status: "queued" }, "generation job queued");
+    }
+    return execution;
   }
 
   await app.register(cors, {
@@ -327,6 +423,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     analysisEnabled: analyzer.configured,
     analysisSchemaVersion: "garment-dna-v0.2",
     resultIterationEnabled: true,
+    generationJobsAsync: true,
     maxRefinementDepth,
   }));
 
@@ -444,37 +541,41 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       operation = "regenerate";
     }
 
-    const execution = await repository.executeOnce(
-      readIdempotencyKey(request),
+    const execution = enqueueGeneration(
+      request,
       createRequestFingerprint({
         type: "generation",
         baseRequestFingerprint,
         parentJobId: parentJobId ?? null,
       }),
-      () =>
-        runGeneration(request, {
-          sourceImage,
-          prompt,
-          promptVersion: input.promptVersion,
-          summary: resultSummary,
-          basePrompt: prompt,
-          baseSummary: resultSummary,
-          baseRequestFingerprint,
-          sourceImageSha256: sha256(sourceImage.bytes),
-          revisionInstructions: [],
-          strategy: analyzed ? "analyzed" : "direct",
-          directionId: directionId ?? null,
-          directionName,
-          operation,
-          parentJobId: parentJobId ?? null,
-          revisionInstruction: null,
-        }),
+      {
+        sourceImage,
+        prompt,
+        promptVersion: input.promptVersion,
+        summary: resultSummary,
+        basePrompt: prompt,
+        baseSummary: resultSummary,
+        baseRequestFingerprint,
+        sourceImageSha256: sha256(sourceImage.bytes),
+        revisionInstructions: [],
+        strategy: analyzed ? "analyzed" : "direct",
+        directionId: directionId ?? null,
+        directionName,
+        operation,
+        parentJobId: parentJobId ?? null,
+        revisionInstruction: null,
+      },
     );
 
-    if (execution.reused) {
-      request.log.info({ jobId: execution.result.jobId }, "idempotent generation result reused");
+    return reply.code(execution.reused ? 200 : 202).send(execution.job);
+  });
+
+  app.get<{ Params: { jobId: string } }>("/api/v1/generations/:jobId", async (request, reply) => {
+    const job = repository.getJob(request.params.jobId);
+    if (!job) {
+      throw new RequestError(404, "GENERATION_JOB_NOT_FOUND", "生成任务不存在或已经过期。");
     }
-    return reply.code(execution.reused ? 200 : 201).send(execution.result);
+    return reply.header("Cache-Control", "no-store").send(job);
   });
 
   app.post<{ Params: { jobId: string } }>(
@@ -526,33 +627,25 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
         instruction: parsedBody.data.instruction,
         sourceImageSha256: sourceImageFingerprint,
       });
-      const execution = await repository.executeOnce(
-        readIdempotencyKey(request),
-        requestFingerprint,
-        () =>
-          runGeneration(request, {
-            sourceImage,
-            prompt,
-            promptVersion: "garment-iteration-v1",
-            summary: `${parent.baseSummary} · 继续修改：${parsedBody.data.instruction}`,
-            basePrompt: parent.basePrompt,
-            baseSummary: parent.baseSummary,
-            baseRequestFingerprint: parent.baseRequestFingerprint,
-            sourceImageSha256: parent.sourceImageSha256,
-            revisionInstructions,
-            strategy: parent.response.strategy,
-            directionId: parent.response.directionId,
-            directionName: parent.response.directionName,
-            operation: "refine",
-            parentJobId: parent.response.jobId,
-            revisionInstruction: parsedBody.data.instruction,
-          }),
-      );
+      const execution = enqueueGeneration(request, requestFingerprint, {
+        sourceImage,
+        prompt,
+        promptVersion: "garment-iteration-v1",
+        summary: `${parent.baseSummary} · 继续修改：${parsedBody.data.instruction}`,
+        basePrompt: parent.basePrompt,
+        baseSummary: parent.baseSummary,
+        baseRequestFingerprint: parent.baseRequestFingerprint,
+        sourceImageSha256: parent.sourceImageSha256,
+        revisionInstructions,
+        strategy: parent.response.strategy,
+        directionId: parent.response.directionId,
+        directionName: parent.response.directionName,
+        operation: "refine",
+        parentJobId: parent.response.jobId,
+        revisionInstruction: parsedBody.data.instruction,
+      });
 
-      if (execution.reused) {
-        request.log.info({ jobId: execution.result.jobId }, "idempotent refinement result reused");
-      }
-      return reply.code(execution.reused ? 200 : 201).send(execution.result);
+      return reply.code(execution.reused ? 200 : 202).send(execution.job);
     },
   );
 
@@ -572,51 +665,24 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   );
 
   app.setErrorHandler((error, request, reply) => {
-    let statusCode = 500;
-    let code = "INTERNAL_ERROR";
-    let message = "服务暂时不可用，请稍后重试。";
-    let retryable = true;
-
-    if (error instanceof RequestError) {
-      statusCode = error.statusCode;
-      code = error.code;
-      message = error.message;
-      retryable = error.retryable;
-    } else if (error instanceof IdempotencyKeyConflictError) {
-      statusCode = 409;
-      code = "IDEMPOTENCY_KEY_REUSED";
-      message = error.message;
-      retryable = false;
-    } else if (error instanceof GarmentProviderError) {
-      statusCode = providerStatus(error.code);
-      code = error.code;
-      message = error.message;
-      retryable = error.retryable;
-    } else if (hasErrorCode(error) && error.code === "FST_REQ_FILE_TOO_LARGE") {
-      statusCode = 413;
-      code = "IMAGE_TOO_LARGE";
-      message = "图片不能超过 10 MB。";
-      retryable = false;
-    }
+    const normalized = normalizeError(error);
 
     const response: ApiErrorResponse = {
-      code,
-      message,
+      code: normalized.code,
+      message: normalized.message,
       requestId: request.id,
-      retryable,
+      retryable: normalized.retryable,
     };
-    const providerValidationIssues =
-      error instanceof GarmentProviderError && error.cause instanceof z.ZodError
-        ? error.cause.issues.map((issue) => ({
-            code: issue.code,
-            path: issue.path.join("."),
-          }))
-        : undefined;
     request.log.warn(
-      { code, statusCode, retryable, providerValidationIssues },
+      {
+        code: normalized.code,
+        statusCode: normalized.statusCode,
+        retryable: normalized.retryable,
+        providerValidationIssues: normalized.providerValidationIssues,
+      },
       "API request failed",
     );
-    return reply.code(statusCode).send(response);
+    return reply.code(normalized.statusCode).send(response);
   });
 
   return app;

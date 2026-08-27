@@ -9,8 +9,13 @@ import type {
   GarmentGenerationResult,
   GarmentImageProviderInput,
   GenerationApiResponse,
+  GenerationJobStatusResponse,
 } from "@cloth-idea/domain";
-import type { GarmentAnalysisProvider, GarmentImageProvider } from "@cloth-idea/model-providers";
+import {
+  GarmentProviderError,
+  type GarmentAnalysisProvider,
+  type GarmentImageProvider,
+} from "@cloth-idea/model-providers";
 import { describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "./app";
@@ -200,17 +205,39 @@ async function createTestContext() {
   return { app, assetDirectory, provider, analyzer };
 }
 
+async function waitForGeneration(
+  app: Awaited<ReturnType<typeof buildApp>>,
+  jobId: string,
+): Promise<GenerationApiResponse> {
+  await vi.waitFor(async () => {
+    const response = await app.inject({ method: "GET", url: `/api/v1/generations/${jobId}` });
+    expect(response.statusCode).toBe(200);
+    expect(response.json<GenerationJobStatusResponse>().status).toBe("succeeded");
+  });
+  const response = await app.inject({ method: "GET", url: `/api/v1/generations/${jobId}` });
+  return response.json<GenerationApiResponse>();
+}
+
 describe("generation API", () => {
   it("reports provider readiness", async () => {
     const context = await createTestContext();
     try {
       const response = await context.app.inject({ method: "GET", url: "/health" });
+      const capabilitiesResponse = await context.app.inject({
+        method: "GET",
+        url: "/api/v1/capabilities",
+      });
 
       expect(response.statusCode).toBe(200);
       expect(response.json()).toMatchObject({
         status: "ok",
         model: "fake-wan",
         providerConfigured: true,
+      });
+      expect(capabilitiesResponse.statusCode).toBe(200);
+      expect(capabilitiesResponse.json()).toMatchObject({
+        generationJobsAsync: true,
+        resultIterationEnabled: true,
       });
     } finally {
       await context.app.close();
@@ -228,8 +255,24 @@ describe("generation API", () => {
         ...multipartRequest,
       });
 
-      expect(response.statusCode).toBe(201);
-      const result = response.json<GenerationApiResponse>();
+      expect(response.statusCode).toBe(202);
+      const submitted = response.json<GenerationJobStatusResponse>();
+      expect(submitted).toMatchObject({ status: "queued" });
+
+      const repeatedResponse = await context.app.inject({
+        method: "POST",
+        url: "/api/v1/generations",
+        ...(await createMultipartRequest()),
+      });
+      expect(repeatedResponse.statusCode).toBe(200);
+      expect(repeatedResponse.json<GenerationJobStatusResponse>().jobId).toBe(submitted.jobId);
+
+      const result = await waitForGeneration(context.app, submitted.jobId);
+      const statusResponse = await context.app.inject({
+        method: "GET",
+        url: `/api/v1/generations/${submitted.jobId}`,
+      });
+      expect(statusResponse.headers["cache-control"]).toBe("no-store");
       expect(result).toMatchObject({
         status: "succeeded",
         provider: "alibaba-wan",
@@ -250,14 +293,13 @@ describe("generation API", () => {
       expect(assetResponse.headers["content-type"]).toContain("image/png");
       expect(assetResponse.rawPayload).toEqual(Buffer.from([...pngBytes, 1]));
 
-      const repeatedResponse = await context.app.inject({
+      const finalRepeatedResponse = await context.app.inject({
         method: "POST",
         url: "/api/v1/generations",
         ...(await createMultipartRequest()),
       });
-      expect(repeatedResponse.statusCode).toBe(200);
-      expect(repeatedResponse.json<GenerationApiResponse>().jobId).toBe(result.jobId);
-      expect(context.provider.generateVariation).toHaveBeenCalledTimes(1);
+      expect(finalRepeatedResponse.statusCode).toBe(200);
+      expect(finalRepeatedResponse.json<GenerationApiResponse>().jobId).toBe(result.jobId);
     } finally {
       await context.app.close();
       await rm(context.assetDirectory, { recursive: true, force: true });
@@ -276,6 +318,69 @@ describe("generation API", () => {
       expect(response.statusCode).toBe(400);
       expect(response.json()).toMatchObject({
         code: "IMAGE_REQUIRED",
+        retryable: false,
+      });
+    } finally {
+      await context.app.close();
+      await rm(context.assetDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("exposes provider failures through the generation job status", async () => {
+    const context = await createTestContext();
+    try {
+      context.provider.generateVariation.mockRejectedValueOnce(
+        new GarmentProviderError("PROVIDER_RATE_LIMITED", "模型请求过于频繁，请稍后重试。", {
+          retryable: true,
+        }),
+      );
+      const response = await context.app.inject({
+        method: "POST",
+        url: "/api/v1/generations",
+        ...(await createMultipartRequest({ idempotencyKey: "failed-generation" })),
+      });
+      expect(response.statusCode).toBe(202);
+      const submitted = response.json<GenerationJobStatusResponse>();
+
+      await vi.waitFor(async () => {
+        const statusResponse = await context.app.inject({
+          method: "GET",
+          url: `/api/v1/generations/${submitted.jobId}`,
+        });
+        expect(statusResponse.json<GenerationJobStatusResponse>()).toMatchObject({
+          status: "failed",
+          error: {
+            code: "PROVIDER_RATE_LIMITED",
+            retryable: true,
+          },
+        });
+      });
+
+      const repeated = await context.app.inject({
+        method: "POST",
+        url: "/api/v1/generations",
+        ...(await createMultipartRequest({ idempotencyKey: "failed-generation" })),
+      });
+      expect(repeated.statusCode).toBe(200);
+      expect(repeated.json<GenerationJobStatusResponse>().jobId).toBe(submitted.jobId);
+      expect(context.provider.generateVariation).toHaveBeenCalledTimes(1);
+    } finally {
+      await context.app.close();
+      await rm(context.assetDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("returns a stable error for an unknown generation job", async () => {
+    const context = await createTestContext();
+    try {
+      const response = await context.app.inject({
+        method: "GET",
+        url: "/api/v1/generations/00000000-0000-0000-0000-000000000999",
+      });
+
+      expect(response.statusCode).toBe(404);
+      expect(response.json()).toMatchObject({
+        code: "GENERATION_JOB_NOT_FOUND",
         retryable: false,
       });
     } finally {
@@ -317,8 +422,9 @@ describe("generation API", () => {
         })),
       });
 
-      expect(generationResponse.statusCode).toBe(201);
-      const generated = generationResponse.json<GenerationApiResponse>();
+      expect(generationResponse.statusCode).toBe(202);
+      const generatedSubmission = generationResponse.json<GenerationJobStatusResponse>();
+      const generated = await waitForGeneration(context.app, generatedSubmission.jobId);
       expect(generated).toMatchObject({
         strategy: "analyzed",
         directionId: "direction-1",
@@ -343,8 +449,9 @@ describe("generation API", () => {
           idempotencyKey: "regenerate-request",
         })),
       });
-      expect(regeneratedResponse.statusCode).toBe(201);
-      const regenerated = regeneratedResponse.json<GenerationApiResponse>();
+      expect(regeneratedResponse.statusCode).toBe(202);
+      const regeneratedSubmission = regeneratedResponse.json<GenerationJobStatusResponse>();
+      const regenerated = await waitForGeneration(context.app, regeneratedSubmission.jobId);
       expect(regenerated).toMatchObject({
         operation: "regenerate",
         parentJobId: generated.jobId,
@@ -359,8 +466,9 @@ describe("generation API", () => {
           instruction: "袖型再宽松一点，但保留格纹袖口",
         })),
       });
-      expect(refinementResponse.statusCode).toBe(201);
-      const refined = refinementResponse.json<GenerationApiResponse>();
+      expect(refinementResponse.statusCode).toBe(202);
+      const refinedSubmission = refinementResponse.json<GenerationJobStatusResponse>();
+      const refined = await waitForGeneration(context.app, refinedSubmission.jobId);
       expect(refined).toMatchObject({
         operation: "refine",
         parentJobId: regenerated.jobId,
@@ -386,7 +494,9 @@ describe("generation API", () => {
         })),
       });
       expect(repeatedRefinementResponse.statusCode).toBe(200);
-      expect(repeatedRefinementResponse.json<GenerationApiResponse>().jobId).toBe(refined.jobId);
+      expect(repeatedRefinementResponse.json<GenerationJobStatusResponse>().jobId).toBe(
+        refined.jobId,
+      );
       expect(context.provider.generateVariation).toHaveBeenCalledTimes(3);
 
       let lastRefined = refined;
@@ -399,8 +509,9 @@ describe("generation API", () => {
             instruction: `第 ${index} 次继续调整局部结构`,
           })),
         });
-        expect(nextRefinementResponse.statusCode).toBe(201);
-        lastRefined = nextRefinementResponse.json<GenerationApiResponse>();
+        expect(nextRefinementResponse.statusCode).toBe(202);
+        const nextSubmission = nextRefinementResponse.json<GenerationJobStatusResponse>();
+        lastRefined = await waitForGeneration(context.app, nextSubmission.jobId);
         if (index === 2) {
           const repeatedEditProviderInput = context.provider.generateVariation.mock.calls[3]?.[0];
           expect(repeatedEditProviderInput?.referenceImages).toBeUndefined();

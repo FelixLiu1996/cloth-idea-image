@@ -410,7 +410,7 @@ export default function Index() {
           </Button>
           <Button className="text-button" disabled={!canRequest} onClick={() => generate(false)}>
             {generating
-              ? "正在直接生成…"
+              ? "正在创建并处理生成任务…"
               : latestDirectResult
                 ? "按原要求再生成一版"
                 : "跳过分析，直接生成"}
@@ -488,7 +488,7 @@ export default function Index() {
             onClick={() => generate(true)}
           >
             {generating
-              ? "正在按选中方向生成…"
+              ? "正在创建并处理生成任务…"
               : latestSelectedDirectionResult
                 ? "按选中方向再生成一版"
                 : "按选中方向生成效果图"}
@@ -542,7 +542,7 @@ export default function Index() {
               disabled={busy}
               onClick={() => generate(activeResult.strategy === "analyzed", activeResult)}
             >
-              {generating ? "正在生成…" : "按此方向再生成"}
+              {generating ? "正在处理生成任务…" : "按此方向再生成"}
             </Button>
             <Button className="result-action" disabled={saving} onClick={downloadCurrentResult}>
               {saving ? "正在保存…" : "下载结果图"}
@@ -566,7 +566,7 @@ export default function Index() {
               disabled={busy || revisionInstruction.trim().length < 2}
               onClick={refineCurrentResult}
             >
-              {refining ? "正在继续修改…" : "生成修改后的下一版"}
+              {refining ? "正在处理修改任务…" : "生成修改后的下一版"}
             </Button>
           </View>
         </View>

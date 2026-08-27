@@ -88,6 +88,28 @@ export interface ApiErrorResponse {
   readonly retryable: boolean;
 }
 
+export const generationJobPendingStatuses = ["queued", "generating"] as const;
+export type GenerationJobPendingStatus = (typeof generationJobPendingStatuses)[number];
+
+export interface GenerationJobPendingResponse {
+  readonly jobId: string;
+  readonly status: GenerationJobPendingStatus;
+  readonly statusUrl: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface GenerationJobFailedResponse {
+  readonly jobId: string;
+  readonly status: "failed";
+  readonly error: ApiErrorResponse;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export type GenerationJobStatusResponse =
+  GenerationJobPendingResponse | GenerationApiResponse | GenerationJobFailedResponse;
+
 const modeInstructions: Record<GenerationMode, string> = {
   inspiration:
     "这是设计师灵感探索任务。允许明显改变廓形、结构、工艺与辅料，但所有变化必须形成统一设计语言。",

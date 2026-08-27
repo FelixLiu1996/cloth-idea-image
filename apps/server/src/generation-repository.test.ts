@@ -1,7 +1,11 @@
 import type { GenerationApiResponse } from "@cloth-idea/domain";
 import { describe, expect, it, vi } from "vitest";
 
-import { GenerationResultRepository } from "./generation-repository";
+import {
+  GenerationResultRepository,
+  type EnqueueGenerationJobInput,
+  type StoredGenerationRecord,
+} from "./generation-repository";
 
 const result: GenerationApiResponse = {
   jobId: "00000000-0000-0000-0000-000000000001",
@@ -20,65 +24,103 @@ const result: GenerationApiResponse = {
   createdAt: "2026-08-26T12:00:00.000Z",
 };
 
+const record: StoredGenerationRecord = {
+  response: result,
+  assetFileName: "result.png",
+  assetMimeType: "image/png",
+  basePrompt: "base prompt",
+  baseSummary: "快速衍生",
+  baseRequestFingerprint: "request",
+  sourceImageSha256: "source-image-sha256",
+  revisionInstructions: [],
+};
+
+function jobInput(
+  operation: EnqueueGenerationJobInput["operation"],
+  overrides: Partial<EnqueueGenerationJobInput> = {},
+): EnqueueGenerationJobInput {
+  return {
+    jobId: result.jobId,
+    statusUrl: `http://example.test/api/v1/generations/${result.jobId}`,
+    createdAt: result.createdAt,
+    idempotencyKey: "same-key",
+    requestFingerprint: "same-request",
+    operation,
+    mapError: () => ({
+      code: "PROVIDER_UNAVAILABLE",
+      message: "模型暂时不可用。",
+      requestId: "req-1",
+      retryable: true,
+    }),
+    ...overrides,
+  };
+}
+
 describe("GenerationResultRepository", () => {
-  it("shares an in-flight operation for the same idempotency key", async () => {
+  it("returns a queued job immediately and shares it for the same idempotency key", async () => {
     let release: () => void = () => undefined;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
     const operation = vi.fn(async () => {
       await gate;
-      return result;
+      return record;
     });
     const repository = new GenerationResultRepository();
 
-    const first = repository.executeOnce("same-key", "same-request", operation);
-    const second = repository.executeOnce("same-key", "same-request", operation);
-    release();
+    const first = repository.enqueueOnce(jobInput(operation));
+    const second = repository.enqueueOnce(
+      jobInput(operation, { jobId: "00000000-0000-0000-0000-000000000002" }),
+    );
 
-    await expect(first).resolves.toEqual({ result, reused: false });
-    await expect(second).resolves.toEqual({ result, reused: true });
-    expect(operation).toHaveBeenCalledTimes(1);
+    expect(first).toMatchObject({ reused: false, job: { status: "queued", jobId: result.jobId } });
+    expect(second).toMatchObject({ reused: true, job: { jobId: result.jobId } });
+    await vi.waitFor(() => expect(operation).toHaveBeenCalledTimes(1));
+    expect(repository.getJob(result.jobId)?.status).toBe("generating");
+
+    release();
+    await vi.waitFor(() => expect(repository.getJob(result.jobId)?.status).toBe("succeeded"));
+    expect(repository.get(result.jobId)?.response).toEqual(result);
   });
 
-  it("allows a failed operation to be retried", async () => {
+  it("keeps a failed task bound to its idempotency key", async () => {
     const repository = new GenerationResultRepository();
     const failedOperation = vi.fn(async () => {
       throw new Error("temporary failure");
     });
+    const retryOperation = vi.fn(async () => record);
 
-    await expect(repository.executeOnce("retry-key", "request", failedOperation)).rejects.toThrow(
-      "temporary failure",
-    );
-    await expect(
-      repository.executeOnce("retry-key", "request", async () => result),
-    ).resolves.toEqual({ result, reused: false });
-  });
+    repository.enqueueOnce(jobInput(failedOperation));
+    await vi.waitFor(() => expect(repository.getJob(result.jobId)?.status).toBe("failed"));
 
-  it("rejects reuse of an idempotency key for a different request", async () => {
-    const repository = new GenerationResultRepository();
-
-    await repository.executeOnce("same-key", "request-one", async () => result);
-
-    await expect(
-      repository.executeOnce("same-key", "request-two", async () => result),
-    ).rejects.toThrow("同一个幂等键不能用于不同的生成请求");
-  });
-
-  it("stores generation records for later refinement", () => {
-    const repository = new GenerationResultRepository();
-    repository.save({
-      response: result,
-      assetFileName: "result.png",
-      assetMimeType: "image/png",
-      basePrompt: "base prompt",
-      baseSummary: "快速衍生",
-      baseRequestFingerprint: "request",
-      sourceImageSha256: "source-image-sha256",
-      revisionInstructions: [],
+    const repeated = repository.enqueueOnce(jobInput(retryOperation));
+    expect(repeated).toMatchObject({
+      reused: true,
+      job: { status: "failed", jobId: result.jobId },
     });
+    expect(retryOperation).not.toHaveBeenCalled();
+  });
+
+  it("rejects reuse of an idempotency key for a different request", () => {
+    const repository = new GenerationResultRepository();
+    repository.enqueueOnce(jobInput(async () => record));
+
+    expect(() =>
+      repository.enqueueOnce(
+        jobInput(async () => record, {
+          jobId: "00000000-0000-0000-0000-000000000002",
+          requestFingerprint: "request-two",
+        }),
+      ),
+    ).toThrow("同一个幂等键不能用于不同的生成请求");
+  });
+
+  it("stores successful generation records for later refinement", () => {
+    const repository = new GenerationResultRepository();
+    repository.save(record);
 
     expect(repository.get(result.jobId)?.response).toEqual(result);
+    expect(repository.getJob(result.jobId)).toEqual(result);
     expect(repository.get("00000000-0000-0000-0000-000000000999")).toBeNull();
   });
 });

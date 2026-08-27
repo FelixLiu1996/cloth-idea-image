@@ -43,7 +43,7 @@ export function loadServerConfig(environment: NodeJS.ProcessEnv = process.env): 
 export function createGarmentProvider(
   environment: NodeJS.ProcessEnv = process.env,
 ): GarmentImageProvider {
-  const providerName = environment.MODEL_PROVIDER ?? "alibaba-wan";
+  const providerName = environment.MODEL_PROVIDER ?? "alibaba-qwen-image";
   if (providerName !== "alibaba-wan" && providerName !== "alibaba-qwen-image") {
     throw new Error(`不支持的 MODEL_PROVIDER：${providerName}`);
   }
