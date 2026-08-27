@@ -1,5 +1,6 @@
 import {
   GenerationTaskAdmissionService,
+  GenerationTaskExecutionService,
   IdempotencyConflictError,
   TrialQuotaExceededError,
   type AdmitGenerationTaskInput,
@@ -17,17 +18,17 @@ import {
   type WechatCloudQuery,
 } from "./cloud-application-persistence";
 
-interface LessThanOrEqualCondition {
-  readonly operation: "lte";
+interface DateComparisonCondition {
+  readonly operation: "lte" | "gt";
   readonly value: string;
 }
 
-function isLessThanOrEqualCondition(value: unknown): value is LessThanOrEqualCondition {
+function isDateComparisonCondition(value: unknown): value is DateComparisonCondition {
   return (
     typeof value === "object" &&
     value !== null &&
     "operation" in value &&
-    value.operation === "lte" &&
+    (value.operation === "lte" || value.operation === "gt") &&
     "value" in value &&
     typeof value.value === "string"
   );
@@ -105,8 +106,9 @@ class MemoryCollection implements WechatCloudCollection {
       .filter(([, document]) =>
         Object.entries(this.condition).every(([field, expected]) => {
           const actual = document[field];
-          return isLessThanOrEqualCondition(expected)
-            ? typeof actual === "string" && actual <= expected.value
+          return isDateComparisonCondition(expected)
+            ? typeof actual === "string" &&
+                (expected.operation === "lte" ? actual <= expected.value : actual > expected.value)
             : actual === expected;
         }),
       )
@@ -126,7 +128,8 @@ class MemoryDatabaseContext implements WechatCloudDatabaseContext {
 
 class MemoryWechatCloudDatabase extends MemoryDatabaseContext implements WechatCloudDatabase {
   readonly command = {
-    lte: (value: string): LessThanOrEqualCondition => ({ operation: "lte", value }),
+    lte: (value: string): DateComparisonCondition => ({ operation: "lte", value }),
+    gt: (value: string): DateComparisonCondition => ({ operation: "gt", value }),
   };
   private pending: Promise<void> = Promise.resolve();
 
@@ -329,9 +332,16 @@ describe("WeChat Cloud application persistence", () => {
     await expect(
       recreated.persistence.assets.findById("viewer-a", "source-1", createdAt),
     ).resolves.toMatchObject({ fileId: "cloud://test-environment/source-1.jpg" });
-    await expect(recreated.persistence.assets.deleteExpired(expiresAt)).resolves.toEqual([
+    await expect(recreated.persistence.assets.findExpired(expiresAt, 100)).resolves.toEqual([
       expect.objectContaining({ assetId: "source-1", ownerId: "viewer-a" }),
     ]);
+    await expect(
+      recreated.persistence.assets.hasActiveFileReference(
+        "cloud://test-environment/result-1.png",
+        expiresAt,
+      ),
+    ).resolves.toBe(true);
+    await expect(recreated.persistence.assets.delete("viewer-a", "source-1")).resolves.toBe(true);
     await expect(recreated.persistence.assets.delete("viewer-b", "result-1")).resolves.toBe(false);
     await expect(recreated.persistence.assets.delete("viewer-a", "result-1")).resolves.toBe(true);
     expect(database.count(applicationCollectionNames.assets)).toBe(0);
@@ -403,22 +413,27 @@ describe("WeChat Cloud application persistence", () => {
     const admitted = await first.service.admit(input());
     const updatedAt = "2026-08-27T10:00:01.000Z";
 
-    await first.persistence.tasks.update({
-      ...admitted.task,
-      status: {
-        jobId: admitted.task.jobId,
-        status: "generating",
-        statusUrl: input().statusUrl,
-        createdAt,
-        updatedAt,
+    await new GenerationTaskExecutionService(first.persistence).claim({
+      ownerId: admitted.task.ownerId,
+      jobId: admitted.task.jobId,
+      leaseId: "lease-1",
+      now: updatedAt,
+      leaseExpiresAt: "2026-08-27T10:01:01.000Z",
+      interruptedError: {
+        code: "GENERATION_EXECUTION_INTERRUPTED",
+        message: "interrupted",
+        requestId: "request-1",
+        retryable: false,
       },
-      updatedAt,
     });
 
     const recreated = createService(database);
     await expect(
       recreated.persistence.tasks.findById("viewer-a", admitted.task.jobId, updatedAt),
-    ).resolves.toMatchObject({ status: { status: "generating" } });
+    ).resolves.toMatchObject({
+      status: { status: "generating" },
+      execution: { leaseId: "lease-1", attempt: 1, providerCallStartedAt: null },
+    });
     await expect(
       recreated.persistence.tasks.deleteExpired("2026-10-01T00:00:00.000Z"),
     ).resolves.toBe(1);

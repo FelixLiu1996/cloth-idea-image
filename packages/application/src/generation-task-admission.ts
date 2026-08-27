@@ -88,6 +88,7 @@ export class GenerationTaskAdmissionService {
         action: input.action,
         requestFingerprint: input.requestFingerprint,
         status: queuedStatus,
+        execution: null,
         createdAt: input.createdAt,
         updatedAt: input.createdAt,
         expiresAt: input.expiresAt,

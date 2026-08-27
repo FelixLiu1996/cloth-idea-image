@@ -7,6 +7,8 @@ import {
   MemoryIdempotencyRepository,
   MemoryTransactionRunner,
   MemoryTrialQuotaRepository,
+  GenerationTaskAdmissionService,
+  GenerationTaskExecutionService,
 } from "@cloth-idea/application";
 import { describe, expect, it } from "vitest";
 
@@ -228,5 +230,73 @@ describe("garment cloud business handler", () => {
         revisionInstruction: "袖型再宽松一点",
       },
     });
+  });
+
+  it("serializes concurrent idempotent submissions before copying the result", async () => {
+    const harness = createHarness();
+    const generationSource = source("generation-key-1");
+    harness.storage.files.set(generationSource.cloudFileId, Uint8Array.from([1, 2, 3]));
+    const request = {
+      action: "create-generation",
+      ...generationSource,
+      brief,
+    } as const;
+
+    const [first, second] = await Promise.all([harness.handler(request), harness.handler(request)]);
+
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    expect(harness.storage.saveCount).toBe(1);
+    await expect(
+      harness.quotas.getUsage("user", ownerId, "generation", "2026-08-27"),
+    ).resolves.toBe(1);
+  });
+
+  it("turns an expired post-provider lease into a stable failure while polling", async () => {
+    let currentTime = now;
+    const harness = createHarness({ now: () => currentTime });
+    const jobId = "00000000-0000-4000-8000-000000000099";
+    const admitted = await new GenerationTaskAdmissionService(harness.persistence).admit({
+      ownerId,
+      action: "generation",
+      idempotencyKey: "generation-key-1",
+      requestFingerprint: "fingerprint-a",
+      jobId,
+      statusUrl: `wechat-cloud://generation-jobs/${jobId}`,
+      createdAt: now,
+      expiresAt: "2026-09-27T12:00:00.000Z",
+      quotaReservations: [],
+    });
+    const execution = new GenerationTaskExecutionService(harness.persistence);
+    await execution.claim({
+      ownerId,
+      jobId,
+      leaseId: "lease-1",
+      now,
+      leaseExpiresAt: "2026-08-27T12:01:00.000Z",
+      interruptedError: {
+        code: "GENERATION_EXECUTION_INTERRUPTED",
+        message: "interrupted",
+        requestId: "request-1",
+        retryable: false,
+      },
+    });
+    await execution.markProviderCallStarted({
+      ownerId,
+      jobId,
+      leaseId: "lease-1",
+      now: "2026-08-27T12:00:10.000Z",
+    });
+    expect(admitted.task.status.status).toBe("queued");
+
+    currentTime = "2026-08-27T12:02:00.000Z";
+    await expect(harness.handler({ action: "get-generation-job", jobId })).resolves.toMatchObject({
+      ok: true,
+      data: {
+        status: "failed",
+        error: { code: "GENERATION_EXECUTION_INTERRUPTED", retryable: false },
+      },
+    });
+    expect(harness.storage.saveCount).toBe(0);
   });
 });

@@ -12,6 +12,7 @@ import {
 } from "./cloud-application-persistence";
 import { WechatCloudGarmentAssetStorage } from "./cloud-asset-storage";
 import { createGarmentCloudBusinessHandler, isWechatCloudBusinessAction } from "./business-handler";
+import { createGarmentCleanupHandler, isGarmentCleanupTimerEvent } from "./cleanup-handler";
 
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV as unknown as string });
 
@@ -170,6 +171,18 @@ const businessHandler = createGarmentCloudBusinessHandler({
   assetRetentionHours: trialLimits.retentionHours,
 });
 
+const cleanupHandler = createGarmentCleanupHandler({
+  analyses: applicationPersistence.analyses,
+  assets: applicationPersistence.assets,
+  tasks: applicationPersistence.tasks,
+  idempotency: applicationPersistence.idempotency,
+  deleteFile: (fileId) => garmentAssetStorage.delete(fileId),
+  now: () => new Date().toISOString(),
+});
+
 export async function main(event: unknown): Promise<unknown> {
+  if (isGarmentCleanupTimerEvent(event) && !cloud.getWXContext().OPENID) {
+    return cleanupHandler();
+  }
   return isWechatCloudBusinessAction(event) ? businessHandler(event) : handler(event);
 }

@@ -339,20 +339,25 @@ export class MemoryGarmentAssetRepository
     this.records.set(recordKey(record.ownerId, record.assetId), record);
   }
 
-  async delete(ownerId: string, assetId: string): Promise<boolean> {
-    return this.records.delete(recordKey(ownerId, assetId));
+  async findExpired(now: string, limit: number): Promise<readonly GarmentAssetRecord[]> {
+    assertIsoDate(now);
+    if (!Number.isInteger(limit) || limit <= 0) {
+      throw new Error("过期资产查询数量必须是正整数。");
+    }
+    return [...this.records.values()]
+      .filter((record) => isExpired(record.expiresAt, now))
+      .slice(0, limit);
   }
 
-  async deleteExpired(now: string): Promise<readonly GarmentAssetRecord[]> {
+  async hasActiveFileReference(fileId: string, now: string): Promise<boolean> {
     assertIsoDate(now);
-    const deleted: GarmentAssetRecord[] = [];
-    for (const [key, record] of this.records) {
-      if (isExpired(record.expiresAt, now)) {
-        this.records.delete(key);
-        deleted.push(record);
-      }
-    }
-    return deleted;
+    return [...this.records.values()].some(
+      (record) => record.fileId === fileId && !isExpired(record.expiresAt, now),
+    );
+  }
+
+  async delete(ownerId: string, assetId: string): Promise<boolean> {
+    return this.records.delete(recordKey(ownerId, assetId));
   }
 
   createSnapshot(): unknown {

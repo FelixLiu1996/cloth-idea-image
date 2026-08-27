@@ -20,12 +20,20 @@ export interface GarmentAnalysisRepository {
 
 export type GenerationTaskAction = "generation" | "refinement";
 
+export interface GenerationTaskExecutionLease {
+  readonly leaseId: string;
+  readonly leaseExpiresAt: string;
+  readonly attempt: number;
+  readonly providerCallStartedAt: string | null;
+}
+
 export interface GenerationTaskRecord {
   readonly jobId: string;
   readonly ownerId: string;
   readonly action: GenerationTaskAction;
   readonly requestFingerprint: string;
   readonly status: GenerationJobStatusResponse;
+  readonly execution: GenerationTaskExecutionLease | null;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly expiresAt: string;
@@ -118,9 +126,10 @@ export interface GarmentAssetRecord {
 
 export interface GarmentAssetRepository {
   findById(ownerId: string, assetId: string, now: string): Promise<GarmentAssetRecord | null>;
+  findExpired(now: string, limit: number): Promise<readonly GarmentAssetRecord[]>;
+  hasActiveFileReference(fileId: string, now: string): Promise<boolean>;
   save(record: GarmentAssetRecord): Promise<void>;
   delete(ownerId: string, assetId: string): Promise<boolean>;
-  deleteExpired(now: string): Promise<readonly GarmentAssetRecord[]>;
 }
 
 export interface ApplicationTransactionRunner {

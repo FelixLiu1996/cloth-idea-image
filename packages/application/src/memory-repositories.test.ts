@@ -113,9 +113,10 @@ describe("memory application repositories", () => {
     });
 
     await expect(repository.findById("viewer-b", "asset-1", beforeExpiry)).resolves.toBeNull();
-    await expect(repository.deleteExpired(afterExpiry)).resolves.toEqual([
+    await expect(repository.findExpired(afterExpiry, 100)).resolves.toEqual([
       expect.objectContaining({ assetId: "asset-1", fileId: "cloud://environment/source.jpg" }),
     ]);
+    await expect(repository.delete("viewer-a", "asset-1")).resolves.toBe(true);
     await expect(repository.findById("viewer-a", "asset-1", afterExpiry)).resolves.toBeNull();
   });
 

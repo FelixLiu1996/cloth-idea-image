@@ -18,6 +18,7 @@ import type {
   TrialQuotaReservationResult,
   TrialQuotaScope,
   TrialQuotaSnapshot,
+  GenerationTaskExecutionLease,
 } from "@cloth-idea/application";
 import {
   garmentAnalysisSchema,
@@ -61,6 +62,7 @@ export interface WechatCloudDatabaseContext {
 export interface WechatCloudDatabase extends WechatCloudDatabaseContext {
   readonly command: {
     lte(value: string): unknown;
+    gt(value: string): unknown;
   };
   runTransaction<T>(
     operation: (transaction: WechatCloudDatabaseContext) => Promise<T>,
@@ -306,12 +308,34 @@ function parseTask(value: unknown): GenerationTaskRecord | null {
   if (!status) {
     return null;
   }
+  let execution: GenerationTaskExecutionLease | null = null;
+  if (value.execution !== undefined && value.execution !== null) {
+    if (
+      !isRecord(value.execution) ||
+      typeof value.execution.leaseId !== "string" ||
+      typeof value.execution.leaseExpiresAt !== "string" ||
+      typeof value.execution.attempt !== "number" ||
+      !Number.isInteger(value.execution.attempt) ||
+      value.execution.attempt <= 0 ||
+      (value.execution.providerCallStartedAt !== null &&
+        typeof value.execution.providerCallStartedAt !== "string")
+    ) {
+      return null;
+    }
+    execution = {
+      leaseId: value.execution.leaseId,
+      leaseExpiresAt: value.execution.leaseExpiresAt,
+      attempt: value.execution.attempt,
+      providerCallStartedAt: value.execution.providerCallStartedAt,
+    };
+  }
   return {
     jobId: value.jobId,
     ownerId: value.ownerId,
     action: value.action,
     requestFingerprint: value.requestFingerprint,
     status,
+    execution,
     createdAt: value.createdAt,
     updatedAt: value.updatedAt,
     expiresAt: value.expiresAt,
@@ -412,16 +436,6 @@ abstract class WechatCloudRepositoryBase {
       }
     }
   }
-
-  protected async readExpiredBatch(collectionName: string, now: string): Promise<unknown[]> {
-    const result = await this.scope
-      .current()
-      .collection(collectionName)
-      .where({ expiresAt: this.scope.database.command.lte(now) })
-      .limit(100)
-      .get();
-    return Array.isArray(result.data) ? result.data : [];
-  }
 }
 
 class WechatGarmentAnalysisRepository
@@ -478,6 +492,36 @@ class WechatGarmentAssetRepository
       .set({ data: record });
   }
 
+  async findExpired(now: string, limit: number): Promise<readonly GarmentAssetRecord[]> {
+    if (!Number.isInteger(limit) || limit <= 0 || limit > 100) {
+      throw new Error("过期资产查询数量必须是 1 到 100 的整数。");
+    }
+    const result = await this.scope
+      .current()
+      .collection(applicationCollectionNames.assets)
+      .where({ expiresAt: this.scope.database.command.lte(now) })
+      .limit(limit)
+      .get();
+    const documents = Array.isArray(result.data) ? result.data : [];
+    return documents.map((document) => {
+      const record = parseAssetRecord(document);
+      if (!record) {
+        throw new Error("过期资产记录格式无效，已停止清理以避免误删云文件。");
+      }
+      return record;
+    });
+  }
+
+  async hasActiveFileReference(fileId: string, now: string): Promise<boolean> {
+    const result = await this.scope
+      .current()
+      .collection(applicationCollectionNames.assets)
+      .where({ fileId, expiresAt: this.scope.database.command.gt(now) })
+      .limit(1)
+      .get();
+    return Array.isArray(result.data) && result.data.length > 0;
+  }
+
   async delete(ownerId: string, assetId: string): Promise<boolean> {
     const id = documentId("asset", [ownerId, assetId]);
     if (!(await this.read(applicationCollectionNames.assets, id))) {
@@ -485,28 +529,6 @@ class WechatGarmentAssetRepository
     }
     await this.scope.current().collection(applicationCollectionNames.assets).doc(id).remove();
     return true;
-  }
-
-  async deleteExpired(now: string): Promise<readonly GarmentAssetRecord[]> {
-    const deleted: GarmentAssetRecord[] = [];
-    for (;;) {
-      const documents = await this.readExpiredBatch(applicationCollectionNames.assets, now);
-      if (documents.length === 0) {
-        return deleted;
-      }
-      for (const document of documents) {
-        const record = parseAssetRecord(document);
-        const id = isRecord(document) ? document._id : undefined;
-        if (!record || typeof id !== "string") {
-          throw new Error("过期资产记录格式无效，已停止清理以避免遗留云文件。");
-        }
-        await this.scope.current().collection(applicationCollectionNames.assets).doc(id).remove();
-        deleted.push(record);
-      }
-      if (documents.length < 100) {
-        return deleted;
-      }
-    }
   }
 }
 

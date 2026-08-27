@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   ApplicationStateConflictError,
   GenerationTaskAdmissionService,
+  GenerationTaskExecutionService,
   IdempotencyConflictError,
   TrialQuotaExceededError,
   type GarmentAnalysisRepository,
@@ -65,6 +66,7 @@ export interface GarmentCloudBusinessHandlerDependencies {
   readonly globalDailyAnalysisLimit: number;
   readonly globalDailyGenerationLimit: number;
   readonly assetRetentionHours: number;
+  readonly executionLeaseSeconds?: number;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -81,6 +83,21 @@ function viewerFingerprint(openId: string): string {
 
 function addHours(value: string, hours: number): string {
   return new Date(Date.parse(value) + hours * 60 * 60 * 1_000).toISOString();
+}
+
+function addSeconds(value: string, seconds: number): string {
+  return new Date(Date.parse(value) + seconds * 1_000).toISOString();
+}
+
+function interruptedExecutionError(
+  dependencies: GarmentCloudBusinessHandlerDependencies,
+): ApiErrorResponse {
+  return {
+    code: "GENERATION_EXECUTION_INTERRUPTED",
+    message: "生成执行曾在模型调用后中断，已停止自动重试以避免重复计费。",
+    requestId: (dependencies.createRequestId ?? randomUUID)(),
+    retryable: false,
+  };
 }
 
 function dayOf(value: string): string {
@@ -557,33 +574,50 @@ async function createGeneration(
     if (existingIdempotency.requestFingerprint !== fingerprint) {
       throw new IdempotencyConflictError();
     }
-    const existing = await dependencies.persistence.tasks.findById(
+    const existingTask = await dependencies.persistence.tasks.findById(
       ownerId,
       existingIdempotency.resourceId,
       now,
     );
-    if (!existing) {
+    if (!existingTask) {
       throw new ApplicationStateConflictError("幂等记录绑定的生成任务不存在或已经过期。");
     }
-    return existing.status;
+    if (existingTask.status.status === "succeeded" || existingTask.status.status === "failed") {
+      return existingTask.status;
+    }
   }
 
   const context = await resolveGenerationContext(dependencies, ownerId, request, now);
-  const jobId = (dependencies.createResourceId ?? randomUUID)();
+  const proposedJobId = (dependencies.createResourceId ?? randomUUID)();
   const expiresAt = addHours(now, dependencies.assetRetentionHours);
   const admission = await new GenerationTaskAdmissionService(dependencies.persistence).admit({
     ownerId,
     action,
     idempotencyKey: request.idempotencyKey,
     requestFingerprint: fingerprint,
-    jobId,
-    statusUrl: `wechat-cloud://generation-jobs/${jobId}`,
+    jobId: proposedJobId,
+    statusUrl: `wechat-cloud://generation-jobs/${proposedJobId}`,
     createdAt: now,
     expiresAt,
     quotaReservations: quotaReservations(dependencies, ownerId, "generation", now),
   });
-  if (admission.reused) {
+  if (admission.task.status.status === "succeeded" || admission.task.status.status === "failed") {
     return admission.task.status;
+  }
+
+  const jobId = admission.task.jobId;
+  const leaseId = (dependencies.createResourceId ?? randomUUID)();
+  const execution = new GenerationTaskExecutionService(dependencies.persistence);
+  const claim = await execution.claim({
+    ownerId,
+    jobId,
+    leaseId,
+    now,
+    leaseExpiresAt: addSeconds(now, dependencies.executionLeaseSeconds ?? 60),
+    interruptedError: interruptedExecutionError(dependencies),
+  });
+  if (!claim.claimed) {
+    return claim.task.status;
   }
 
   try {
@@ -601,6 +635,7 @@ async function createGeneration(
       createdAt: now,
       expiresAt,
     });
+    await execution.markProviderCallStarted({ ownerId, jobId, leaseId, now });
     const savedResult = await dependencies.storage.save({
       ownerId,
       assetId: `result-${jobId}`,
@@ -634,10 +669,12 @@ async function createGeneration(
       revisionInstruction: context.revisionInstruction,
       createdAt: now,
     };
-    await dependencies.persistence.tasks.update({
-      ...admission.task,
+    await execution.complete({
+      ownerId,
+      jobId,
+      leaseId,
+      now,
       status: succeeded,
-      updatedAt: now,
     });
   } catch {
     const failed: GenerationJobFailedResponse = {
@@ -652,11 +689,11 @@ async function createGeneration(
       createdAt: now,
       updatedAt: now,
     };
-    await dependencies.persistence.tasks.update({
-      ...admission.task,
-      status: failed,
-      updatedAt: now,
-    });
+    try {
+      await execution.complete({ ownerId, jobId, leaseId, now, status: failed });
+    } catch {
+      // A newer lease owns the task; the stale invocation must not overwrite it.
+    }
   }
 
   // 首次响应保持 queued，强制客户端验证任务状态查询和重启恢复路径。
@@ -736,7 +773,21 @@ export function createGarmentCloudBusinessHandler(
             false,
           );
         }
-        const task = await dependencies.persistence.tasks.findById(ownerId, request.jobId, now);
+        const existingTask = await dependencies.persistence.tasks.findById(
+          ownerId,
+          request.jobId,
+          now,
+        );
+        const task = existingTask
+          ? await new GenerationTaskExecutionService(
+              dependencies.persistence,
+            ).recoverExpiredStartedCall({
+              ownerId,
+              jobId: request.jobId,
+              now,
+              interruptedError: interruptedExecutionError(dependencies),
+            })
+          : null;
         return task
           ? { ok: true, data: task.status }
           : apiError(dependencies, "GENERATION_JOB_NOT_FOUND", "没有找到对应的生成任务。", false);

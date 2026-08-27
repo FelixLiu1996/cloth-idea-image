@@ -9,6 +9,13 @@
       "timeout": 30,
       "memorySize": 256,
       "installDependency": true,
+      "triggers": [
+        {
+          "name": "garment-expired-data-cleanup",
+          "type": "timer",
+          "config": "0 20 4 * * * *"
+        }
+      ],
       "envVariables": {
         "WECHAT_CLOUD_BUSINESS_PROVIDER": "fake",
         "TRIAL_DAILY_ANALYSIS_LIMIT": "5",
