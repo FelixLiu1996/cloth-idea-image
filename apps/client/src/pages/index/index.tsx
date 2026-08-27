@@ -552,7 +552,7 @@ export default function Index() {
           <View className="refinement-panel">
             <Text className="refinement-title">继续修改当前结果</Text>
             <Text className="refinement-copy">
-              当前结果会作为下一版参考图，原始保留项和选中方向继续生效。
+              系统会从原图重新生成下一版，原始保留项、选中方向和累计修改继续生效。
             </Text>
             <Textarea
               className="refinement-input"
