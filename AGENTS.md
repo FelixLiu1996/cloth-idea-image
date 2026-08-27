@@ -7,6 +7,8 @@
 3. 与任务相关的 `docs/` 文档
 4. `docs/decisions/` 中相关的架构决策记录
 
+若任务涉及产品优化、竞品借鉴、改款输入、结果迭代或系列化衍生，必须阅读 `docs/online-product-and-repository-research.md`。
+
 ## 实施状态阅读规则
 
 - `docs/current-status.md` 是“当前实际做到了什么”的唯一准确信源。

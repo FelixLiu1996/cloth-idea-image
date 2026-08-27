@@ -57,6 +57,7 @@
 - [模型接入与选型](docs/ai-models.md)
 - [开发规范](docs/development-guide.md)
 - [单机受控试用](docs/controlled-trial.md)
+- [线上产品、开源仓库与产品优化参考](docs/online-product-and-repository-research.md)
 - [当前状态](docs/current-status.md)
 - [模型评测记录](docs/model-evaluation-log.md)
 - [架构决策记录](docs/decisions/README.md)
