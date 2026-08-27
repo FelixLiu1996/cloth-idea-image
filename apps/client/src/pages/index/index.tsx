@@ -563,7 +563,7 @@ export default function Index() {
         </View>
       )}
 
-      {activeResult && image && (
+      {activeResult && (
         <View className="result-section">
           <View className="result-heading">
             <Text className="result-kicker">DESIGN READY</Text>
@@ -571,21 +571,25 @@ export default function Index() {
             <Text className="result-summary">{activeResult.summary}</Text>
           </View>
 
-          <View className="comparison-grid">
-            <View className="comparison-item">
-              <Text className="comparison-label">
-                {activeResult.operation === "refine" && parentResult ? "上一版" : "原图"}
-              </Text>
-              <Image
-                className="comparison-image"
-                src={
-                  activeResult.operation === "refine" && parentResult
-                    ? parentResult.resultUrl
-                    : image.path
-                }
-                mode="aspectFit"
-              />
-            </View>
+          <View
+            className={`comparison-grid ${!image && !parentResult ? "comparison-grid--single" : ""}`}
+          >
+            {(image || parentResult) && (
+              <View className="comparison-item">
+                <Text className="comparison-label">
+                  {activeResult.operation === "refine" && parentResult ? "上一版" : "原图"}
+                </Text>
+                <Image
+                  className="comparison-image"
+                  src={
+                    activeResult.operation === "refine" && parentResult
+                      ? parentResult.resultUrl
+                      : image!.path
+                  }
+                  mode="aspectFit"
+                />
+              </View>
+            )}
             <View className="comparison-item">
               <Text className="comparison-label comparison-label--current">当前结果</Text>
               <Image className="comparison-image" src={activeResult.resultUrl} mode="aspectFit" />
@@ -603,36 +607,49 @@ export default function Index() {
           <View className="result-actions">
             <Button
               className="result-action result-action--primary"
-              disabled={busy}
+              disabled={busy || !image || (activeResult.strategy === "analyzed" && !analysisResult)}
               onClick={() => generate(activeResult.strategy === "analyzed", activeResult)}
             >
-              {generating ? "正在处理生成任务…" : "按此方向再生成"}
+              {generating
+                ? "正在处理生成任务…"
+                : !image || (activeResult.strategy === "analyzed" && !analysisResult)
+                  ? "重新开始后可再生成"
+                  : "按此方向再生成"}
             </Button>
             <Button className="result-action" disabled={saving} onClick={downloadCurrentResult}>
               {saving ? "正在保存…" : "下载结果图"}
             </Button>
           </View>
 
-          <View className="refinement-panel">
-            <Text className="refinement-title">继续修改当前结果</Text>
-            <Text className="refinement-copy">
-              系统会从原图重新生成下一版，原始保留项、选中方向和累计修改继续生效。
-            </Text>
-            <Textarea
-              className="refinement-input"
-              value={revisionInstruction}
-              maxlength={500}
-              placeholder="例如：袖型再宽松一点，门襟改为隐藏拉链，其余保持不变"
-              onInput={(event) => setRevisionInstruction(event.detail.value)}
-            />
-            <Button
-              className="refinement-button"
-              disabled={busy || revisionInstruction.trim().length < 2}
-              onClick={refineCurrentResult}
-            >
-              {refining ? "正在处理修改任务…" : "生成修改后的下一版"}
-            </Button>
-          </View>
+          {image ? (
+            <View className="refinement-panel">
+              <Text className="refinement-title">继续修改当前结果</Text>
+              <Text className="refinement-copy">
+                系统会从原图重新生成下一版，原始保留项、选中方向和累计修改继续生效。
+              </Text>
+              <Textarea
+                className="refinement-input"
+                value={revisionInstruction}
+                maxlength={500}
+                placeholder="例如：袖型再宽松一点，门襟改为隐藏拉链，其余保持不变"
+                onInput={(event) => setRevisionInstruction(event.detail.value)}
+              />
+              <Button
+                className="refinement-button"
+                disabled={busy || revisionInstruction.trim().length < 2}
+                onClick={refineCurrentResult}
+              >
+                {refining ? "正在处理修改任务…" : "生成修改后的下一版"}
+              </Button>
+            </View>
+          ) : (
+            <View className="refinement-panel">
+              <Text className="refinement-title">已恢复云端结果</Text>
+              <Text className="refinement-copy">
+                当前设备没有保留原图临时文件，你仍可保存结果；如需继续修改，请重新上传原图并重新开始。
+              </Text>
+            </View>
+          )}
         </View>
       )}
 

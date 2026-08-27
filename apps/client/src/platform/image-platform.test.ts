@@ -47,4 +47,21 @@ describe("image platform result saving", () => {
       filePath: "/tmp/http-result.jpg",
     });
   });
+
+  it("returns an actionable message when album permission is denied", async () => {
+    downloadCloudFile.mockResolvedValue({ tempFilePath: "/tmp/cloud-result.jpg" });
+    saveImageToPhotosAlbum.mockRejectedValue({ errMsg: "saveImageToPhotosAlbum:fail auth deny" });
+
+    await expect(
+      saveGeneratedImage("cloud://env/garment-results/viewer/job/result.jpg"),
+    ).rejects.toThrow("没有相册保存权限，请在小程序设置中允许保存到相册。");
+  });
+
+  it("does not expose raw cloud download failures", async () => {
+    downloadCloudFile.mockRejectedValue(new Error("internal cloud storage detail"));
+
+    await expect(
+      saveGeneratedImage("cloud://env/garment-results/viewer/job/result.jpg"),
+    ).rejects.toThrow("云端结果图片下载失败，请稍后重试。");
+  });
 });

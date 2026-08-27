@@ -22,6 +22,7 @@ export interface AdmitGenerationTaskInput {
   readonly idempotencyAction?: IdempotencyAction;
   readonly idempotencyKey: string | undefined;
   readonly requestFingerprint: string;
+  readonly executionPayload?: unknown;
   readonly jobId: string;
   readonly statusUrl: string;
   readonly createdAt: string;
@@ -87,6 +88,7 @@ export class GenerationTaskAdmissionService {
         ownerId: input.ownerId,
         action: input.action,
         requestFingerprint: input.requestFingerprint,
+        executionPayload: input.executionPayload ?? null,
         status: queuedStatus,
         execution: null,
         createdAt: input.createdAt,

@@ -366,9 +366,11 @@ export class WechatCloudGarmentGateway implements GarmentGateway {
     }
   }
 
-  private forget(): void {
+  private forget(jobId: string): void {
     try {
-      this.pendingJobs.clear();
+      if (this.pendingJobs.read() === jobId) {
+        this.pendingJobs.clear();
+      }
     } catch {
       // 云端结果仍可正常返回。
     }
@@ -380,6 +382,7 @@ export class WechatCloudGarmentGateway implements GarmentGateway {
 
   private async waitForGenerationJob(
     initial: GenerationJobStatusResponse,
+    acknowledgeTerminal: boolean,
   ): Promise<GenerationApiResponse> {
     let job = initial;
     const deadline = Date.now() + GENERATION_POLL_BUDGET_MS;
@@ -389,11 +392,15 @@ export class WechatCloudGarmentGateway implements GarmentGateway {
 
     while (true) {
       if (job.status === "succeeded") {
-        this.forget();
+        if (acknowledgeTerminal) {
+          this.forget(job.jobId);
+        }
         return job;
       }
       if (job.status === "failed") {
-        this.forget();
+        if (acknowledgeTerminal) {
+          this.forget(job.jobId);
+        }
         throw new GenerationApiError(job.error.message, job.error.code, job.error.retryable);
       }
       if (Date.now() >= deadline) {
@@ -440,7 +447,7 @@ export class WechatCloudGarmentGateway implements GarmentGateway {
         ...(input.parentJobId ? { parentJobId: input.parentJobId } : {}),
       }),
     );
-    return this.waitForGenerationJob(submitted);
+    return this.waitForGenerationJob(submitted, false);
   }
 
   async refineGeneration(input: RefineGenerationRequest): Promise<GenerationApiResponse> {
@@ -453,7 +460,7 @@ export class WechatCloudGarmentGateway implements GarmentGateway {
         instruction: input.instruction,
       }),
     );
-    return this.waitForGenerationJob(submitted);
+    return this.waitForGenerationJob(submitted, false);
   }
 
   async restorePendingGeneration(): Promise<GenerationApiResponse | null> {
@@ -462,10 +469,10 @@ export class WechatCloudGarmentGateway implements GarmentGateway {
       return null;
     }
     try {
-      return await this.waitForGenerationJob(await this.getGenerationJob(jobId));
+      return await this.waitForGenerationJob(await this.getGenerationJob(jobId), true);
     } catch (error) {
       if (error instanceof GenerationApiError && error.code === "GENERATION_JOB_NOT_FOUND") {
-        this.forget();
+        this.forget(jobId);
       }
       throw error;
     }

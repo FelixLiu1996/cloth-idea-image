@@ -65,6 +65,10 @@ const trialLimits = {
   globalAnalysis: readNonNegativeInteger("TRIAL_GLOBAL_DAILY_ANALYSIS_LIMIT", 100),
   globalGeneration: readNonNegativeInteger("TRIAL_GLOBAL_DAILY_GENERATION_LIMIT", 200),
   retentionHours: readPositiveInteger("ASSET_RETENTION_HOURS", 72),
+  fakeGenerationDelayMs: readNonNegativeInteger(
+    "FAKE_GENERATION_DELAY_MS",
+    process.env.WECHAT_CLOUD_BUSINESS_PROVIDER === "fake" ? 15_000 : 0,
+  ),
 } as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -169,6 +173,7 @@ const businessHandler = createGarmentCloudBusinessHandler({
   globalDailyAnalysisLimit: trialLimits.globalAnalysis,
   globalDailyGenerationLimit: trialLimits.globalGeneration,
   assetRetentionHours: trialLimits.retentionHours,
+  fakeGenerationDelayMs: trialLimits.fakeGenerationDelayMs,
 });
 
 const cleanupHandler = createGarmentCleanupHandler({

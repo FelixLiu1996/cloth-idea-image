@@ -334,6 +334,7 @@ function parseTask(value: unknown): GenerationTaskRecord | null {
     ownerId: value.ownerId,
     action: value.action,
     requestFingerprint: value.requestFingerprint,
+    executionPayload: value.executionPayload ?? null,
     status,
     execution,
     createdAt: value.createdAt,

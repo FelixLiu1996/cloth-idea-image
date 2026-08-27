@@ -237,7 +237,7 @@ describe("WeChat cloud garment gateway", () => {
     });
   });
 
-  it("polls a queued task and clears its local recovery marker after success", async () => {
+  it("polls a queued task and keeps its recovery marker until a new page acknowledges it", async () => {
     const pending = memoryPending();
     const uploadFile = vi.fn().mockResolvedValue({ fileID: "cloud://env/source.png" });
     const callFunction = vi.fn().mockImplementation(({ data }) => {
@@ -272,7 +272,7 @@ describe("WeChat cloud garment gateway", () => {
         directionId: "direction-1",
       }),
     ).resolves.toEqual(result);
-    expect(pending.value).toBeNull();
+    expect(pending.value).toBe(result.jobId);
     expect(callFunction).toHaveBeenCalledWith({
       name: "garment-api",
       data: { action: "get-generation-job", jobId: result.jobId },
@@ -289,6 +289,22 @@ describe("WeChat cloud garment gateway", () => {
 
     await expect(recreatedGateway.restorePendingGeneration()).resolves.toEqual(result);
     expect(pending.value).toBeNull();
+  });
+
+  it("does not let an older restored task clear a newer pending job", async () => {
+    const pending = memoryPending(result.jobId);
+    const newerJobId = "00000000-0000-4000-8000-000000000002";
+    const callFunction = vi.fn().mockImplementation(() => {
+      pending.write(newerJobId);
+      return Promise.resolve({ result: { ok: true, data: result } });
+    });
+    const gateway = new WechatCloudGarmentGateway(
+      { callFunction, uploadFile: vi.fn() } as WechatCloudGarmentClient,
+      pending,
+    );
+
+    await expect(gateway.restorePendingGeneration()).resolves.toEqual(result);
+    expect(pending.value).toBe(newerJobId);
   });
 
   it("maps stable cloud errors without exposing raw cloud details", async () => {

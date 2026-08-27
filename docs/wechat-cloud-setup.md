@@ -150,9 +150,12 @@ TRIAL_DAILY_GENERATION_LIMIT=10
 TRIAL_GLOBAL_DAILY_ANALYSIS_LIMIT=100
 TRIAL_GLOBAL_DAILY_GENERATION_LIMIT=200
 ASSET_RETENTION_HOURS=72
+FAKE_GENERATION_DELAY_MS=15000
 ```
 
 `WECHAT_CLOUD_BUSINESS_PROVIDER` 未设置为 `fake` 时，业务动作会返回 `CLOUD_BACKEND_NOT_DEPLOYED`；该默认关闭行为用于避免尚未验收的云端路径被误用。Fake 验收不需要配置任何 Qwen、万相或其他模型 Key。
+
+`FAKE_GENERATION_DELAY_MS` 只用于受控 Fake 真机验收：创建动作先持久化任务并立即返回，第一次状态查询领取执行租约后等待指定时间再转存结果。当前测试环境设为15秒，便于在任务仍为 `generating` 时退出并验证重进恢复；接入真实 Provider 后必须删除该人工延迟。
 
 重新部署云函数后，用微信云网关构建小程序：
 
@@ -187,6 +190,7 @@ TARO_APP_GARMENT_GATEWAY_MODE=wechat-cloud npm run build:weapp
 
 2026-08-27 已把持久执行租约和 `garment-expired-data-cleanup` 定时触发器部署到同一 `garment-api` 云函数：
 
+- Fake 生图创建动作只持久化任务和执行输入并立即返回 `queued`；第一次状态查询领取租约后才转存结果。该设计用于小程序退出恢复验收，不应被描述为正式消息队列。
 - 同一生成任务只能持有一个有效执行租约，并发同键请求不会同时转存结果或调用 Provider。
 - 模型调用前发生中断时，同一请求可在租约过期后接管；模型调用一旦开始，过期任务只会转成稳定失败，不自动重新调用模型。
 - 任务查询会把“模型调用后中断且租约过期”的任务收敛为 `GENERATION_EXECUTION_INTERRUPTED`，避免永久停留在处理中。

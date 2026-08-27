@@ -77,12 +77,29 @@ describe("GenerationTaskAdmissionService", () => {
 
     expect(result.reused).toBe(false);
     expect(result.task.status.status).toBe("queued");
+    expect(result.task.executionPayload).toBeNull();
     await expect(
       harness.quotas.getUsage("user", "viewer-a", "generation", "2026-08-27"),
     ).resolves.toBe(1);
     await expect(
       harness.quotas.getUsage("global", "trial", "generation", "2026-08-27"),
     ).resolves.toBe(1);
+  });
+
+  it("persists an opaque execution payload for a later worker", async () => {
+    const harness = createHarness();
+
+    const result = await harness.service.admit(
+      input({ executionPayload: { version: 1, sourceFileId: "cloud://source.jpg" } }),
+    );
+
+    expect(result.task.executionPayload).toEqual({
+      version: 1,
+      sourceFileId: "cloud://source.jpg",
+    });
+    await expect(
+      harness.tasks.findById(result.task.ownerId, result.task.jobId, createdAt),
+    ).resolves.toMatchObject({ executionPayload: { version: 1 } });
   });
 
   it("serializes concurrent retries and returns the same task without double charging quota", async () => {

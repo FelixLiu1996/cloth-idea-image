@@ -549,6 +549,10 @@ $line: #dedbd2;
   padding: 0 24px 24px;
 }
 
+.comparison-grid--single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .comparison-item {
   overflow: hidden;
   border-radius: 18px;

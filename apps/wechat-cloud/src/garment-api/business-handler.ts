@@ -8,6 +8,7 @@ import {
   TrialQuotaExceededError,
   type GarmentAnalysisRepository,
   type GarmentAssetRepository,
+  type GenerationTaskRecord,
   type GenerationTaskRepository,
   type IdempotencyRepository,
   type TrialQuotaRepository,
@@ -67,6 +68,7 @@ export interface GarmentCloudBusinessHandlerDependencies {
   readonly globalDailyGenerationLimit: number;
   readonly assetRetentionHours: number;
   readonly executionLeaseSeconds?: number;
+  readonly fakeGenerationDelayMs?: number;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -496,12 +498,30 @@ async function analyze(
   });
 }
 
+interface FakeGenerationContext {
+  readonly strategy: "direct" | "analyzed";
+  readonly directionId: string | null;
+  readonly directionName: string | null;
+  readonly summary: string;
+  readonly operation: "initial" | "regenerate" | "refine";
+  readonly parentJobId: string | null;
+  readonly revisionInstruction: string | null;
+}
+
+interface FakeGenerationExecutionPayload {
+  readonly version: "fake-generation-v1";
+  readonly source: WechatCloudSourceImageReference;
+  readonly context: FakeGenerationContext;
+}
+
+class InvalidGenerationExecutionPayloadError extends Error {}
+
 async function resolveGenerationContext(
   dependencies: GarmentCloudBusinessHandlerDependencies,
   ownerId: string,
   request: CreateWechatCloudGenerationRequest | CreateWechatCloudRefinementRequest,
   now: string,
-) {
+): Promise<FakeGenerationContext> {
   if (request.action === "create-refinement") {
     if (request.instruction.trim().length < 2 || request.instruction.length > 500) {
       throw new RangeError("修改要求格式不正确。");
@@ -556,6 +576,212 @@ async function resolveGenerationContext(
   };
 }
 
+function parseNullableString(value: unknown): string | null | undefined {
+  return value === null ? null : typeof value === "string" ? value : undefined;
+}
+
+function parseGenerationExecutionPayload(value: unknown): FakeGenerationExecutionPayload | null {
+  if (
+    !isRecord(value) ||
+    value.version !== "fake-generation-v1" ||
+    !isRecord(value.source) ||
+    !isRecord(value.context)
+  ) {
+    return null;
+  }
+  const source = parseImageReference(value.source);
+  const directionId = parseNullableString(value.context.directionId);
+  const directionName = parseNullableString(value.context.directionName);
+  const parentJobId = parseNullableString(value.context.parentJobId);
+  const revisionInstruction = parseNullableString(value.context.revisionInstruction);
+  if (
+    !source ||
+    (value.context.strategy !== "direct" && value.context.strategy !== "analyzed") ||
+    directionId === undefined ||
+    directionName === undefined ||
+    typeof value.context.summary !== "string" ||
+    value.context.summary.length > 2_000 ||
+    (value.context.operation !== "initial" &&
+      value.context.operation !== "regenerate" &&
+      value.context.operation !== "refine") ||
+    parentJobId === undefined ||
+    revisionInstruction === undefined
+  ) {
+    return null;
+  }
+  return {
+    version: value.version,
+    source,
+    context: {
+      strategy: value.context.strategy,
+      directionId,
+      directionName,
+      summary: value.context.summary,
+      operation: value.context.operation,
+      parentJobId,
+      revisionInstruction,
+    },
+  };
+}
+
+function fakeExecutionPayload(
+  request: CreateWechatCloudGenerationRequest | CreateWechatCloudRefinementRequest,
+  context: FakeGenerationContext,
+): FakeGenerationExecutionPayload {
+  return {
+    version: "fake-generation-v1",
+    source: {
+      idempotencyKey: request.idempotencyKey,
+      cloudFileId: request.cloudFileId,
+      fileName: request.fileName,
+      mimeType: request.mimeType,
+      size: request.size,
+    },
+    context,
+  };
+}
+
+async function completeFailedGeneration(
+  dependencies: GarmentCloudBusinessHandlerDependencies,
+  ownerId: string,
+  task: GenerationTaskRecord,
+  leaseId: string,
+  error: unknown,
+): Promise<GenerationJobStatusResponse> {
+  const completedAt = dependencies.now();
+  const invalidPayload = error instanceof InvalidGenerationExecutionPayloadError;
+  const failed: GenerationJobFailedResponse = {
+    jobId: task.jobId,
+    status: "failed",
+    error: {
+      code: invalidPayload
+        ? "GENERATION_EXECUTION_PAYLOAD_INVALID"
+        : "FAKE_PROVIDER_EXECUTION_FAILED",
+      message: invalidPayload
+        ? "生成任务执行数据无效，请重新提交。"
+        : "测试生图任务执行失败，请稍后重试。",
+      requestId: (dependencies.createRequestId ?? randomUUID)(),
+      retryable: !invalidPayload,
+    },
+    createdAt: task.createdAt,
+    updatedAt: completedAt,
+  };
+  const execution = new GenerationTaskExecutionService(dependencies.persistence);
+  try {
+    return (
+      await execution.complete({
+        ownerId,
+        jobId: task.jobId,
+        leaseId,
+        now: completedAt,
+        status: failed,
+      })
+    ).status;
+  } catch {
+    return (
+      (await dependencies.persistence.tasks.findById(ownerId, task.jobId, completedAt))?.status ??
+      failed
+    );
+  }
+}
+
+async function executeGenerationTask(
+  dependencies: GarmentCloudBusinessHandlerDependencies,
+  ownerId: string,
+  jobId: string,
+  now: string,
+): Promise<GenerationJobStatusResponse> {
+  const leaseId = (dependencies.createResourceId ?? randomUUID)();
+  const execution = new GenerationTaskExecutionService(dependencies.persistence);
+  const claim = await execution.claim({
+    ownerId,
+    jobId,
+    leaseId,
+    now,
+    leaseExpiresAt: addSeconds(now, dependencies.executionLeaseSeconds ?? 60),
+    interruptedError: interruptedExecutionError(dependencies),
+  });
+  if (!claim.claimed) {
+    return claim.task.status;
+  }
+
+  try {
+    const payload = parseGenerationExecutionPayload(claim.task.executionPayload);
+    if (!payload || validateImageReference(payload.source, ownerId)) {
+      throw new InvalidGenerationExecutionPayloadError();
+    }
+    const bytes = await dependencies.storage.read(payload.source.cloudFileId);
+    if (bytes.byteLength !== payload.source.size) {
+      throw new Error("uploaded image size mismatch");
+    }
+    await dependencies.persistence.assets.save({
+      assetId: `source-${jobId}`,
+      ownerId,
+      kind: "source",
+      fileId: payload.source.cloudFileId,
+      mimeType: payload.source.mimeType,
+      size: payload.source.size,
+      createdAt: now,
+      expiresAt: claim.task.expiresAt,
+    });
+    await execution.markProviderCallStarted({
+      ownerId,
+      jobId,
+      leaseId,
+      now: dependencies.now(),
+    });
+    const delayMs = dependencies.fakeGenerationDelayMs ?? 0;
+    if (delayMs > 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    }
+    const savedResult = await dependencies.storage.save({
+      ownerId,
+      assetId: `result-${jobId}`,
+      kind: "result",
+      mimeType: payload.source.mimeType,
+      bytes,
+    });
+    const completedAt = dependencies.now();
+    await dependencies.persistence.assets.save({
+      assetId: `result-${jobId}`,
+      ownerId,
+      kind: "result",
+      fileId: savedResult.fileId,
+      mimeType: payload.source.mimeType,
+      size: savedResult.size,
+      createdAt: completedAt,
+      expiresAt: claim.task.expiresAt,
+    });
+    const succeeded: GenerationApiResponse = {
+      jobId,
+      status: "succeeded",
+      provider: "testing-fake",
+      model: "fake-image-copy-v1",
+      resultUrl: savedResult.fileId,
+      summary: payload.context.summary,
+      durationMs: Math.max(0, Date.parse(completedAt) - Date.parse(now)),
+      strategy: payload.context.strategy,
+      directionId: payload.context.directionId,
+      directionName: payload.context.directionName,
+      operation: payload.context.operation,
+      parentJobId: payload.context.parentJobId,
+      revisionInstruction: payload.context.revisionInstruction,
+      createdAt: claim.task.createdAt,
+    };
+    return (
+      await execution.complete({
+        ownerId,
+        jobId,
+        leaseId,
+        now: completedAt,
+        status: succeeded,
+      })
+    ).status;
+  } catch (error) {
+    return completeFailedGeneration(dependencies, ownerId, claim.task, leaseId, error);
+  }
+}
+
 async function createGeneration(
   dependencies: GarmentCloudBusinessHandlerDependencies,
   ownerId: string,
@@ -582,9 +808,7 @@ async function createGeneration(
     if (!existingTask) {
       throw new ApplicationStateConflictError("幂等记录绑定的生成任务不存在或已经过期。");
     }
-    if (existingTask.status.status === "succeeded" || existingTask.status.status === "failed") {
-      return existingTask.status;
-    }
+    return existingTask.status;
   }
 
   const context = await resolveGenerationContext(dependencies, ownerId, request, now);
@@ -595,108 +819,13 @@ async function createGeneration(
     action,
     idempotencyKey: request.idempotencyKey,
     requestFingerprint: fingerprint,
+    executionPayload: fakeExecutionPayload(request, context),
     jobId: proposedJobId,
     statusUrl: `wechat-cloud://generation-jobs/${proposedJobId}`,
     createdAt: now,
     expiresAt,
     quotaReservations: quotaReservations(dependencies, ownerId, "generation", now),
   });
-  if (admission.task.status.status === "succeeded" || admission.task.status.status === "failed") {
-    return admission.task.status;
-  }
-
-  const jobId = admission.task.jobId;
-  const leaseId = (dependencies.createResourceId ?? randomUUID)();
-  const execution = new GenerationTaskExecutionService(dependencies.persistence);
-  const claim = await execution.claim({
-    ownerId,
-    jobId,
-    leaseId,
-    now,
-    leaseExpiresAt: addSeconds(now, dependencies.executionLeaseSeconds ?? 60),
-    interruptedError: interruptedExecutionError(dependencies),
-  });
-  if (!claim.claimed) {
-    return claim.task.status;
-  }
-
-  try {
-    const bytes = await dependencies.storage.read(request.cloudFileId);
-    if (bytes.byteLength !== request.size) {
-      throw new Error("uploaded image size mismatch");
-    }
-    await dependencies.persistence.assets.save({
-      assetId: `source-${jobId}`,
-      ownerId,
-      kind: "source",
-      fileId: request.cloudFileId,
-      mimeType: request.mimeType,
-      size: request.size,
-      createdAt: now,
-      expiresAt,
-    });
-    await execution.markProviderCallStarted({ ownerId, jobId, leaseId, now });
-    const savedResult = await dependencies.storage.save({
-      ownerId,
-      assetId: `result-${jobId}`,
-      kind: "result",
-      mimeType: request.mimeType,
-      bytes,
-    });
-    await dependencies.persistence.assets.save({
-      assetId: `result-${jobId}`,
-      ownerId,
-      kind: "result",
-      fileId: savedResult.fileId,
-      mimeType: request.mimeType,
-      size: savedResult.size,
-      createdAt: now,
-      expiresAt,
-    });
-    const succeeded: GenerationApiResponse = {
-      jobId,
-      status: "succeeded",
-      provider: "testing-fake",
-      model: "fake-image-copy-v1",
-      resultUrl: savedResult.fileId,
-      summary: context.summary,
-      durationMs: 0,
-      strategy: context.strategy,
-      directionId: context.directionId,
-      directionName: context.directionName,
-      operation: context.operation,
-      parentJobId: context.parentJobId,
-      revisionInstruction: context.revisionInstruction,
-      createdAt: now,
-    };
-    await execution.complete({
-      ownerId,
-      jobId,
-      leaseId,
-      now,
-      status: succeeded,
-    });
-  } catch {
-    const failed: GenerationJobFailedResponse = {
-      jobId,
-      status: "failed",
-      error: {
-        code: "FAKE_PROVIDER_EXECUTION_FAILED",
-        message: "测试生图任务执行失败，请稍后重试。",
-        requestId: (dependencies.createRequestId ?? randomUUID)(),
-        retryable: true,
-      },
-      createdAt: now,
-      updatedAt: now,
-    };
-    try {
-      await execution.complete({ ownerId, jobId, leaseId, now, status: failed });
-    } catch {
-      // A newer lease owns the task; the stale invocation must not overwrite it.
-    }
-  }
-
-  // 首次响应保持 queued，强制客户端验证任务状态查询和重启恢复路径。
   return admission.task.status;
 }
 
@@ -778,18 +907,11 @@ export function createGarmentCloudBusinessHandler(
           request.jobId,
           now,
         );
-        const task = existingTask
-          ? await new GenerationTaskExecutionService(
-              dependencies.persistence,
-            ).recoverExpiredStartedCall({
-              ownerId,
-              jobId: request.jobId,
-              now,
-              interruptedError: interruptedExecutionError(dependencies),
-            })
+        const status = existingTask
+          ? await executeGenerationTask(dependencies, ownerId, request.jobId, now)
           : null;
-        return task
-          ? { ok: true, data: task.status }
+        return status
+          ? { ok: true, data: status }
           : apiError(dependencies, "GENERATION_JOB_NOT_FOUND", "没有找到对应的生成任务。", false);
       }
 

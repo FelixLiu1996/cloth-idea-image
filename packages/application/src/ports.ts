@@ -32,6 +32,11 @@ export interface GenerationTaskRecord {
   readonly ownerId: string;
   readonly action: GenerationTaskAction;
   readonly requestFingerprint: string;
+  /**
+   * Opaque server-side input required to execute a queued task after admission.
+   * The owning runtime must validate this value before use.
+   */
+  readonly executionPayload: unknown | null;
   readonly status: GenerationJobStatusResponse;
   readonly execution: GenerationTaskExecutionLease | null;
   readonly createdAt: string;

@@ -10,7 +10,7 @@ import {
   GenerationTaskAdmissionService,
   GenerationTaskExecutionService,
 } from "@cloth-idea/application";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   createGarmentCloudBusinessHandler,
@@ -166,6 +166,7 @@ describe("garment cloud business handler", () => {
     } as const;
     const submitted = await harness.handler(generationRequest);
     expect(submitted).toMatchObject({ ok: true, data: { status: "queued" } });
+    expect(harness.storage.saveCount).toBe(0);
     if (!submitted.ok || !("jobId" in submitted.data)) {
       throw new Error("expected generation submission to succeed");
     }
@@ -206,6 +207,9 @@ describe("garment cloud business handler", () => {
     if (!submitted.ok || !("jobId" in submitted.data)) {
       throw new Error("expected generation submission to succeed");
     }
+    await expect(
+      harness.handler({ action: "get-generation-job", jobId: submitted.data.jobId }),
+    ).resolves.toMatchObject({ ok: true, data: { status: "succeeded" } });
 
     const refinementSource = source("refinement-key-1");
     harness.storage.files.set(refinementSource.cloudFileId, Uint8Array.from([4, 5, 6]));
@@ -232,7 +236,7 @@ describe("garment cloud business handler", () => {
     });
   });
 
-  it("serializes concurrent idempotent submissions before copying the result", async () => {
+  it("serializes concurrent idempotent submissions and poll-driven execution", async () => {
     const harness = createHarness();
     const generationSource = source("generation-key-1");
     harness.storage.files.set(generationSource.cloudFileId, Uint8Array.from([1, 2, 3]));
@@ -246,10 +250,59 @@ describe("garment cloud business handler", () => {
 
     expect(first.ok).toBe(true);
     expect(second.ok).toBe(true);
+    expect(harness.storage.saveCount).toBe(0);
+    if (!first.ok || !("jobId" in first.data) || !second.ok || !("jobId" in second.data)) {
+      throw new Error("expected both submissions to return a job");
+    }
+    expect(first.data.jobId).toBe(second.data.jobId);
+
+    await Promise.all([
+      harness.handler({ action: "get-generation-job", jobId: first.data.jobId }),
+      harness.handler({ action: "get-generation-job", jobId: first.data.jobId }),
+    ]);
+    await expect(
+      harness.handler({ action: "get-generation-job", jobId: first.data.jobId }),
+    ).resolves.toMatchObject({ ok: true, data: { status: "succeeded" } });
     expect(harness.storage.saveCount).toBe(1);
     await expect(
       harness.quotas.getUsage("user", ownerId, "generation", "2026-08-27"),
     ).resolves.toBe(1);
+  });
+
+  it("keeps a persisted job generating while a delayed worker is still running", async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createHarness({ fakeGenerationDelayMs: 8_000 });
+      const generationSource = source("generation-key-delayed");
+      harness.storage.files.set(generationSource.cloudFileId, Uint8Array.from([1, 2, 3]));
+      const submitted = await harness.handler({
+        action: "create-generation",
+        ...generationSource,
+        brief,
+      });
+      if (!submitted.ok || !("jobId" in submitted.data)) {
+        throw new Error("expected generation submission to succeed");
+      }
+      expect(submitted.data.status).toBe("queued");
+
+      const running = harness.handler({
+        action: "get-generation-job",
+        jobId: submitted.data.jobId,
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(
+        harness.tasks.findById(ownerId, submitted.data.jobId, now),
+      ).resolves.toMatchObject({ status: { status: "generating" } });
+
+      await vi.advanceTimersByTimeAsync(8_000);
+      await expect(running).resolves.toMatchObject({
+        ok: true,
+        data: { status: "succeeded" },
+      });
+      expect(harness.storage.saveCount).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("turns an expired post-provider lease into a stable failure while polling", async () => {
