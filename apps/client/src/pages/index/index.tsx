@@ -14,13 +14,8 @@ import {
   type SelectedImage,
 } from "../../platform/image-platform";
 import { readTrialAccessCode, saveTrialAccessCode } from "../../platform/trial-access-platform";
-import {
-  analyzeGarment,
-  createGeneration,
-  getTrialCapabilities,
-  refineGeneration,
-  type CreateGenerationRequest,
-} from "../../services/generation-api";
+import { garmentGateway } from "../../services/active-garment-gateway";
+import type { CreateGenerationRequest } from "../../services/garment-gateway";
 import "./index.scss";
 
 const modes: readonly {
@@ -98,7 +93,8 @@ export default function Index() {
 
   useEffect(() => {
     let active = true;
-    void getTrialCapabilities()
+    void garmentGateway
+      .getTrialCapabilities()
       .then((capabilities) => {
         if (active) {
           setTrialAccessRequired(capabilities.trialAccessRequired);
@@ -196,7 +192,7 @@ export default function Index() {
     setActiveJobId(null);
     setRevisionInstruction("");
     try {
-      const nextAnalysis = await analyzeGarment(input);
+      const nextAnalysis = await garmentGateway.analyzeGarment(input);
       setAnalysisResult(nextAnalysis);
       setSelectedDirectionId(nextAnalysis.analysis.recommendedDirectionId);
     } catch (error) {
@@ -226,7 +222,7 @@ export default function Index() {
             ? latestMatchingResult(results, "analyzed", selectedDirectionId)
             : latestMatchingResult(results, "direct", null)
           : parentOverride;
-      const nextResult = await createGeneration({
+      const nextResult = await garmentGateway.createGeneration({
         ...input,
         ...(useAnalysis && analysisResult && selectedDirectionId
           ? { analysisId: analysisResult.analysisId, directionId: selectedDirectionId }
@@ -257,7 +253,7 @@ export default function Index() {
     setRefining(true);
     setErrorMessage("");
     try {
-      const nextResult = await refineGeneration({
+      const nextResult = await garmentGateway.refineGeneration({
         parentJobId: activeResult.jobId,
         imagePath: image.path,
         instruction,

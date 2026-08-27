@@ -1,12 +1,25 @@
 import type {
   ApiErrorResponse,
-  DesignIntensity,
   GarmentAnalysisApiResponse,
   GenerationApiResponse,
   GenerationJobStatusResponse,
-  GenerationMode,
 } from "@cloth-idea/domain";
 import Taro from "@tarojs/taro";
+
+import {
+  GenerationApiError,
+  type CreateGenerationRequest,
+  type GarmentGateway,
+  type RefineGenerationRequest,
+  type TrialCapabilities,
+} from "./garment-gateway";
+
+export {
+  GenerationApiError,
+  type CreateGenerationRequest,
+  type RefineGenerationRequest,
+  type TrialCapabilities,
+} from "./garment-gateway";
 
 const ANALYSIS_REQUEST_TIMEOUT_MS = 180_000;
 const GENERATION_SUBMIT_TIMEOUT_MS = 30_000;
@@ -14,50 +27,12 @@ const GENERATION_POLL_REQUEST_TIMEOUT_MS = 15_000;
 const GENERATION_POLL_INTERVAL_MS = 1_000;
 const GENERATION_POLL_BUDGET_MS = 360_000;
 
-export interface CreateGenerationRequest {
-  readonly imagePath: string;
-  readonly mode: GenerationMode;
-  readonly preserveItems: string;
-  readonly changeRequest: string;
-  readonly styleDirection: string;
-  readonly intensity: DesignIntensity;
-  readonly analysisId?: string;
-  readonly directionId?: string;
-  readonly parentJobId?: string;
-  readonly accessCode?: string;
-}
-
-export interface RefineGenerationRequest {
-  readonly parentJobId: string;
-  readonly imagePath: string;
-  readonly instruction: string;
-  readonly accessCode?: string;
-}
-
-export interface TrialCapabilities {
-  readonly trialAccessRequired: boolean;
-  readonly trialDailyAnalysisLimit: number;
-  readonly trialDailyGenerationLimit: number;
-  readonly assetRetentionHours: number;
-}
-
 function createIdempotencyKey(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 function wait(delayMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, delayMs));
-}
-
-export class GenerationApiError extends Error {
-  constructor(
-    message: string,
-    readonly code: string,
-    readonly retryable: boolean,
-  ) {
-    super(message);
-    this.name = "GenerationApiError";
-  }
 }
 
 function parsePayload(data: unknown): unknown {
@@ -268,3 +243,10 @@ export async function getTrialCapabilities(): Promise<TrialCapabilities> {
     assetRetentionHours: capabilities.assetRetentionHours ?? 0,
   };
 }
+
+export const httpGarmentGateway: GarmentGateway = {
+  analyzeGarment,
+  createGeneration,
+  refineGeneration,
+  getTrialCapabilities,
+};
