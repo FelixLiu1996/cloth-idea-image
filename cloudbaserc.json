@@ -1,0 +1,14 @@
+{
+  "envId": "cloud1-d1g87yl4k4cdf212b",
+  "functionRoot": "./apps/client/cloudfunctions",
+  "functions": [
+    {
+      "name": "garment-api",
+      "handler": "index.main",
+      "runtime": "Nodejs20.19",
+      "timeout": 30,
+      "memorySize": 256,
+      "installDependency": true
+    }
+  ]
+}

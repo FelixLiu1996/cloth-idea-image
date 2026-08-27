@@ -39,7 +39,8 @@ Model Provider 层
 ```text
 apps/
 ├── client/                 # Taro H5/微信小程序
-└── server/                 # Node.js TypeScript API
+├── server/                 # Node.js TypeScript API
+└── wechat-cloud/           # 微信云函数 TypeScript 源码与部署构建
 packages/
 ├── domain/                 # 业务类型、规则和用例
 └── model-providers/        # 万相与后续模型适配器
@@ -48,7 +49,7 @@ prompts/
 scripts/
 ```
 
-客户端内部的 `platform/` 隔离 Taro 图片选择和微信云环境初始化能力，`services/` 通过 `GarmentGateway` 隔离业务页面与传输实现。当前 H5 使用 HTTP 网关；微信云网关入口已经建立但云函数尚未部署，因此构建仍默认选择 HTTP。共享 TypeScript、ESLint、Prettier 和 Vitest 配置当前保存在仓库根目录，达到多个实现后再提取独立配置包。
+客户端内部的 `platform/` 隔离 Taro 图片选择和微信云环境初始化能力，`services/` 通过 `GarmentGateway` 隔离业务页面与传输实现。当前 H5 使用 HTTP 网关；微信云网关已经能读取云端能力，另有内部诊断页验证 OpenID、云存储、云函数、数据库恢复和清理，但模型业务方法仍明确拒绝调用，因此构建继续默认选择 HTTP。`apps/wechat-cloud` 保存可测试的云函数源码，构建后输出到被 Git 忽略的 `apps/client/cloudfunctions/`。共享 TypeScript、ESLint、Prettier 和 Vitest 配置当前保存在仓库根目录，达到多个实现后再提取独立配置包。
 
 验证脚本保留在 `scripts/`，用于显式执行付费模型冒烟测试，不进入普通 CI。
 
@@ -143,6 +144,8 @@ interface GarmentImageProvider {
 视觉分析使用独立的 `GarmentAnalysisProvider`。它接收原图与用户简报，返回经过 Zod 校验的 `garment-dna-v0.2`；生图 Provider 不负责解释或重新组合这个结构。
 
 ## 7. 当前本地实现
+
+微信云端当前只实现无模型费用的基础设施探针：白名单按 OpenID 派生的不可逆用户指纹查询，临时图片按用户指纹隔离上传，`garment-api` 将探针记录持久化并允许所属用户重新读取和主动清理。该切片已有内存仓储测试和客户端协议测试，但尚未完成真实云环境部署验收，不包含分析、生图或正式任务迁移。部署步骤见 [微信云开发无模型费用验证](wechat-cloud-setup.md)。
 
 当前纵向切片中分析仍为同步请求，首次生成、再次生成和继续修改采用可轮询的异步任务：
 
