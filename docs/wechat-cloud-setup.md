@@ -47,9 +47,17 @@ npm audit --omit=dev
 npm run audit:wechat-cloud
 ```
 
-回到微信开发者工具并重新编译。如果左侧没有出现 `cloudfunctions/garment-api`，关闭后重新导入 `apps/client`。随后右键 `garment-api`，选择“上传并部署：云端安装依赖”。云函数运行时使用 Node.js 20，超时先设为30秒；本探针不会接近该时限。
+构建脚本会把 `@cloth-idea/domain` 等工作区代码内联到 `index.js`，并在产物仍残留未解析的 `@cloth-idea/*` 引用时直接失败，防止云端因缺少本地 workspace 包而无法启动。
 
-仓库同时提供 `cloudbaserc.json`，供后续 CloudBase CLI 部署使用；本轮可以只通过微信开发者工具部署。
+推荐在仓库根目录通过 CloudBase CLI 部署，以确保首次创建就使用 `cloudbaserc.json` 中的 Node.js 20.19、30秒超时和256 MB内存：
+
+```bash
+npx --yes --package @cloudbase/cli@3.8.1 tcb fn deploy garment-api --json
+```
+
+也可以回到微信开发者工具并重新编译。如果左侧没有出现 `cloudfunctions/garment-api`，关闭后重新导入 `apps/client`。随后右键 `garment-api`，选择“上传并部署：云端安装依赖”。开发者工具首次创建函数时可能选择不同运行时；运行时不能通过普通配置更新，部署后必须在云控制台核对为 Node.js 20.19。超时设为30秒；本探针不会接近该时限。
+
+仓库中的 `cloudbaserc.json` 是云函数运行参数的准确信源；通过开发者工具部署后也必须按其中配置核对真实环境。
 
 ## 4. 创建数据库集合
 
@@ -107,3 +115,16 @@ garment-source-temp/{viewerFingerprint}/incoming/{idempotencyKey}.{ext}
 - 全过程没有调用任何付费模型。
 
 如果任一步失败，保留页面显示的稳定错误码和云函数请求 ID；不要复制完整图片、Authorization 请求头或云端密钥到聊天和日志。
+
+## 8. 当前真实环境验证记录
+
+2026-08-27 在独立环境 `cloud1-d1g87yl4k4cdf212b` 完成以下验证，全程未调用模型：
+
+- `garment-api` 以 Node.js 20.19、30秒超时和256 MB内存运行。
+- `trial_members` 与 `infrastructure_probes` 已创建并设置为 `ADMINONLY`；小程序客户端不能直接读写。
+- 云存储权限为 `PRIVATE`，测试图片仅上传者与管理员可访问。
+- 首位体验成员以16位 OpenID 不可逆指纹加入白名单；数据库未保存原始 OpenID。
+- 一张约92 KB的 JPG 已完成真实上传、云函数持久化和“从数据库重新读取”，探针状态为 `succeeded`。
+- 删除云文件和探针记录尚未执行，当前不能把主动清理一项记为已验收。
+
+首次云端调用曾因构建产物残留 `require("@cloth-idea/domain")` 而在函数入口前失败；打包规则和构建期检查已经修复。函数重建后仍能读取原探针记录，证明记录保存在云数据库而不是函数实例内。

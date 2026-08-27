@@ -1,4 +1,4 @@
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -6,6 +6,7 @@ import { build } from "tsup";
 
 const workspaceDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const outputDirectory = resolve(workspaceDirectory, "../client/cloudfunctions/garment-api");
+const outputFile = resolve(outputDirectory, "index.js");
 
 await rm(outputDirectory, { recursive: true, force: true });
 await mkdir(outputDirectory, { recursive: true });
@@ -17,6 +18,7 @@ await build({
   platform: "node",
   target: "node20",
   bundle: true,
+  noExternal: ["@cloth-idea/domain"],
   clean: false,
   sourcemap: false,
   minify: false,
@@ -24,6 +26,11 @@ await build({
   outExtension: () => ({ js: ".js" }),
   silent: true,
 });
+
+const bundle = await readFile(outputFile, "utf8");
+if (/require\(["']@cloth-idea\//.test(bundle)) {
+  throw new Error("Cloud function bundle still contains an unresolved workspace dependency.");
+}
 
 await writeFile(
   resolve(outputDirectory, "package.json"),
