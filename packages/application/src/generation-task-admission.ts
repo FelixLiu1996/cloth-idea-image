@@ -10,6 +10,7 @@ import type {
   GenerationTaskAction,
   GenerationTaskRecord,
   GenerationTaskRepository,
+  IdempotencyAction,
   IdempotencyRepository,
   TrialQuotaRepository,
   TrialQuotaReservation,
@@ -18,7 +19,8 @@ import type {
 export interface AdmitGenerationTaskInput {
   readonly ownerId: string;
   readonly action: GenerationTaskAction;
-  readonly idempotencyKey: string;
+  readonly idempotencyAction?: IdempotencyAction;
+  readonly idempotencyKey: string | undefined;
   readonly requestFingerprint: string;
   readonly jobId: string;
   readonly statusUrl: string;
@@ -44,12 +46,15 @@ export class GenerationTaskAdmissionService {
 
   async admit(input: AdmitGenerationTaskInput): Promise<AdmitGenerationTaskResult> {
     return this.dependencies.transactions.run(async () => {
-      const existingIdempotency = await this.dependencies.idempotency.find(
-        input.ownerId,
-        input.action,
-        input.idempotencyKey,
-        input.createdAt,
-      );
+      const idempotencyAction = input.idempotencyAction ?? input.action;
+      const existingIdempotency = input.idempotencyKey
+        ? await this.dependencies.idempotency.find(
+            input.ownerId,
+            idempotencyAction,
+            input.idempotencyKey,
+            input.createdAt,
+          )
+        : null;
       if (existingIdempotency) {
         if (existingIdempotency.requestFingerprint !== input.requestFingerprint) {
           throw new IdempotencyConflictError();
@@ -91,9 +96,10 @@ export class GenerationTaskAdmissionService {
         throw new ApplicationStateConflictError("生成任务编号已经存在。");
       }
       if (
+        input.idempotencyKey &&
         !(await this.dependencies.idempotency.create({
           ownerId: input.ownerId,
-          action: input.action,
+          action: idempotencyAction,
           key: input.idempotencyKey,
           requestFingerprint: input.requestFingerprint,
           resourceId: input.jobId,

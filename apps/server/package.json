@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@cloth-idea/application": "*",
     "@cloth-idea/domain": "*",
     "@cloth-idea/model-providers": "*",
     "@fastify/cors": "11.3.0",

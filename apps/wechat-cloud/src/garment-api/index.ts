@@ -6,10 +6,17 @@ import {
   createGarmentCloudHandler,
   type StoredInfrastructureProbe,
 } from "./handler";
+import {
+  createWechatCloudApplicationPersistence,
+  type WechatCloudDatabase,
+} from "./cloud-application-persistence";
 
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV as unknown as string });
 
 const database = cloud.database();
+export const applicationPersistence = createWechatCloudApplicationPersistence(
+  database as unknown as WechatCloudDatabase,
+);
 const trialMembers = database.collection("trial_members");
 const infrastructureProbes = database.collection("infrastructure_probes");
 const supportedMimeTypes = new Set<string>(supportedImageMimeTypes);

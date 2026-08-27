@@ -1,5 +1,4 @@
-export type TrialUsageLimitCode =
-  "RATE_LIMIT_DAILY_ANALYSIS_REACHED" | "RATE_LIMIT_DAILY_GENERATION_REACHED";
+export type TrialUsageLimitCode = "RATE_LIMIT_DAILY_ANALYSIS_REACHED";
 
 export class TrialUsageLimitError extends Error {
   readonly statusCode = 429;
@@ -16,7 +15,6 @@ export class TrialUsageLimitError extends Error {
 
 export interface TrialUsagePolicyConfig {
   readonly dailyAnalysisLimit: number;
-  readonly dailyGenerationLimit: number;
   readonly maxConcurrentModelRequests: number;
   readonly generationMinIntervalMs: number;
 }
@@ -24,7 +22,6 @@ export interface TrialUsagePolicyConfig {
 interface DailyUsage {
   day: string;
   analyses: number;
-  generations: number;
 }
 
 function currentUtcDay(now: number): string {
@@ -39,7 +36,6 @@ export class TrialUsagePolicy {
   private usage: DailyUsage = {
     day: currentUtcDay(Date.now()),
     analyses: 0,
-    generations: 0,
   };
   private activeModelRequests = 0;
   private readonly concurrencyWaiters: Array<() => void> = [];
@@ -62,20 +58,6 @@ export class TrialUsagePolicy {
     this.usage.analyses += 1;
   }
 
-  reserveGeneration(now = Date.now()): void {
-    this.resetDailyUsageIfNeeded(now);
-    if (
-      this.config.dailyGenerationLimit > 0 &&
-      this.usage.generations >= this.config.dailyGenerationLimit
-    ) {
-      throw new TrialUsageLimitError(
-        "RATE_LIMIT_DAILY_GENERATION_REACHED",
-        "今日生图额度已用完，请明天再试或调整试用额度。",
-      );
-    }
-    this.usage.generations += 1;
-  }
-
   async runAnalysis<T>(operation: () => Promise<T>): Promise<T> {
     return this.runWithConcurrencySlot(operation);
   }
@@ -93,7 +75,7 @@ export class TrialUsagePolicy {
   private resetDailyUsageIfNeeded(now: number): void {
     const day = currentUtcDay(now);
     if (this.usage.day !== day) {
-      this.usage = { day, analyses: 0, generations: 0 };
+      this.usage = { day, analyses: 0 };
     }
   }
 

@@ -10,11 +10,21 @@ export class IdempotencyConflictError extends Error {
 }
 
 export class TrialQuotaExceededError extends Error {
-  readonly code = "RATE_LIMIT_DAILY_QUOTA_REACHED";
+  readonly code: "RATE_LIMIT_DAILY_ANALYSIS_REACHED" | "RATE_LIMIT_DAILY_GENERATION_REACHED";
+  readonly statusCode = 429;
+  readonly retryable = false;
 
   constructor(readonly denied: TrialQuotaSnapshot) {
-    super("今日试用额度已用完，请明天再试或调整试用额度。");
+    super(
+      denied.kind === "analysis"
+        ? "今日服装分析额度已用完，请明天再试或调整试用额度。"
+        : "今日生图额度已用完，请明天再试或调整试用额度。",
+    );
     this.name = "TrialQuotaExceededError";
+    this.code =
+      denied.kind === "analysis"
+        ? "RATE_LIMIT_DAILY_ANALYSIS_REACHED"
+        : "RATE_LIMIT_DAILY_GENERATION_REACHED";
   }
 }
 

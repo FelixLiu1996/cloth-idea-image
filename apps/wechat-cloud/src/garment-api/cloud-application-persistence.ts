@@ -1,0 +1,550 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash } from "node:crypto";
+
+import type {
+  ApplicationTransactionRunner,
+  GenerationTaskRecord,
+  GenerationTaskRepository,
+  IdempotencyAction,
+  IdempotencyRecord,
+  IdempotencyRepository,
+  TrialQuotaKind,
+  TrialQuotaRepository,
+  TrialQuotaReservation,
+  TrialQuotaReservationResult,
+  TrialQuotaScope,
+  TrialQuotaSnapshot,
+} from "@cloth-idea/application";
+import type { GenerationJobStatusResponse } from "@cloth-idea/domain";
+
+export const applicationCollectionNames = {
+  generationTasks: "generation_jobs",
+  idempotency: "idempotency_records",
+  trialUsage: "trial_usage",
+} as const;
+
+interface WechatGetResult {
+  readonly data?: unknown;
+}
+
+export interface WechatCloudDocumentReference {
+  get(): Promise<WechatGetResult>;
+  set(input: { readonly data: object }): Promise<unknown>;
+  remove(): Promise<unknown>;
+}
+
+export interface WechatCloudQuery {
+  where(condition: Readonly<Record<string, unknown>>): WechatCloudQuery;
+  limit(count: number): WechatCloudQuery;
+  get(): Promise<WechatGetResult>;
+}
+
+export interface WechatCloudCollection extends WechatCloudQuery {
+  doc(id: string): WechatCloudDocumentReference;
+}
+
+export interface WechatCloudDatabaseContext {
+  collection(name: string): WechatCloudCollection;
+}
+
+export interface WechatCloudDatabase extends WechatCloudDatabaseContext {
+  readonly command: {
+    lt(value: string): unknown;
+  };
+  runTransaction<T>(
+    operation: (transaction: WechatCloudDatabaseContext) => Promise<T>,
+    retryTimes?: number,
+  ): Promise<T>;
+}
+
+export interface WechatCloudApplicationPersistence {
+  readonly transactions: ApplicationTransactionRunner;
+  readonly tasks: GenerationTaskRepository;
+  readonly idempotency: IdempotencyRepository;
+  readonly quotas: TrialQuotaRepository;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isMissingDocument(error: unknown): boolean {
+  if (!isRecord(error)) {
+    return false;
+  }
+  return (
+    error.errCode === -1 ||
+    error.code === "DATABASE_REQUEST_DOCUMENT_NOT_FOUND" ||
+    error.code === "DATABASE_DOCUMENT_NOT_FOUND"
+  );
+}
+
+function parseErrorResponse(value: unknown): {
+  readonly code: string;
+  readonly message: string;
+  readonly requestId: string;
+  readonly retryable: boolean;
+} | null {
+  if (
+    !isRecord(value) ||
+    typeof value.code !== "string" ||
+    typeof value.message !== "string" ||
+    typeof value.requestId !== "string" ||
+    typeof value.retryable !== "boolean"
+  ) {
+    return null;
+  }
+  return {
+    code: value.code,
+    message: value.message,
+    requestId: value.requestId,
+    retryable: value.retryable,
+  };
+}
+
+function parseGenerationStatus(value: unknown): GenerationJobStatusResponse | null {
+  if (
+    !isRecord(value) ||
+    typeof value.jobId !== "string" ||
+    typeof value.status !== "string" ||
+    typeof value.createdAt !== "string"
+  ) {
+    return null;
+  }
+
+  if (value.status === "queued" || value.status === "generating") {
+    if (typeof value.statusUrl !== "string" || typeof value.updatedAt !== "string") {
+      return null;
+    }
+    return {
+      jobId: value.jobId,
+      status: value.status,
+      statusUrl: value.statusUrl,
+      createdAt: value.createdAt,
+      updatedAt: value.updatedAt,
+    };
+  }
+
+  if (value.status === "failed") {
+    const error = parseErrorResponse(value.error);
+    if (!error || typeof value.updatedAt !== "string") {
+      return null;
+    }
+    return {
+      jobId: value.jobId,
+      status: value.status,
+      error,
+      createdAt: value.createdAt,
+      updatedAt: value.updatedAt,
+    };
+  }
+
+  if (
+    value.status !== "succeeded" ||
+    (value.provider !== "alibaba-wan" &&
+      value.provider !== "alibaba-qwen-image" &&
+      value.provider !== "volcengine-seedream") ||
+    typeof value.model !== "string" ||
+    typeof value.resultUrl !== "string" ||
+    typeof value.summary !== "string" ||
+    typeof value.durationMs !== "number" ||
+    (value.strategy !== "direct" && value.strategy !== "analyzed") ||
+    (value.directionId !== null && typeof value.directionId !== "string") ||
+    (value.directionName !== null && typeof value.directionName !== "string") ||
+    (value.operation !== "initial" &&
+      value.operation !== "regenerate" &&
+      value.operation !== "refine") ||
+    (value.parentJobId !== null && typeof value.parentJobId !== "string") ||
+    (value.revisionInstruction !== null && typeof value.revisionInstruction !== "string")
+  ) {
+    return null;
+  }
+  return {
+    jobId: value.jobId,
+    status: value.status,
+    provider: value.provider,
+    model: value.model,
+    resultUrl: value.resultUrl,
+    summary: value.summary,
+    durationMs: value.durationMs,
+    strategy: value.strategy,
+    directionId: value.directionId,
+    directionName: value.directionName,
+    operation: value.operation,
+    parentJobId: value.parentJobId,
+    revisionInstruction: value.revisionInstruction,
+    createdAt: value.createdAt,
+  };
+}
+
+function parseTask(value: unknown): GenerationTaskRecord | null {
+  if (
+    !isRecord(value) ||
+    typeof value.jobId !== "string" ||
+    typeof value.ownerId !== "string" ||
+    (value.action !== "generation" && value.action !== "refinement") ||
+    typeof value.requestFingerprint !== "string" ||
+    typeof value.createdAt !== "string" ||
+    typeof value.updatedAt !== "string" ||
+    typeof value.expiresAt !== "string"
+  ) {
+    return null;
+  }
+  const status = parseGenerationStatus(value.status);
+  if (!status) {
+    return null;
+  }
+  return {
+    jobId: value.jobId,
+    ownerId: value.ownerId,
+    action: value.action,
+    requestFingerprint: value.requestFingerprint,
+    status,
+    createdAt: value.createdAt,
+    updatedAt: value.updatedAt,
+    expiresAt: value.expiresAt,
+  };
+}
+
+function parseIdempotency(value: unknown): IdempotencyRecord | null {
+  if (
+    !isRecord(value) ||
+    typeof value.ownerId !== "string" ||
+    (value.action !== "analysis" &&
+      value.action !== "generation" &&
+      value.action !== "refinement") ||
+    typeof value.key !== "string" ||
+    typeof value.requestFingerprint !== "string" ||
+    typeof value.resourceId !== "string" ||
+    typeof value.createdAt !== "string" ||
+    typeof value.expiresAt !== "string"
+  ) {
+    return null;
+  }
+  return {
+    ownerId: value.ownerId,
+    action: value.action,
+    key: value.key,
+    requestFingerprint: value.requestFingerprint,
+    resourceId: value.resourceId,
+    createdAt: value.createdAt,
+    expiresAt: value.expiresAt,
+  };
+}
+
+function documentId(namespace: string, parts: readonly string[]): string {
+  return `${namespace}_${createHash("sha256").update(JSON.stringify(parts)).digest("hex")}`;
+}
+
+function isExpired(expiresAt: string, now: string): boolean {
+  return Date.parse(expiresAt) <= Date.parse(now);
+}
+
+class WechatCloudTransactionScope implements ApplicationTransactionRunner {
+  private readonly context = new AsyncLocalStorage<WechatCloudDatabaseContext>();
+
+  constructor(readonly database: WechatCloudDatabase) {}
+
+  current(): WechatCloudDatabaseContext {
+    return this.context.getStore() ?? this.database;
+  }
+
+  async run<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.context.getStore()) {
+      return operation();
+    }
+    return this.database.runTransaction(
+      (transaction) => this.context.run(transaction, operation),
+      3,
+    );
+  }
+}
+
+abstract class WechatCloudRepositoryBase {
+  constructor(protected readonly scope: WechatCloudTransactionScope) {}
+
+  protected async read(collectionName: string, id: string): Promise<unknown | null> {
+    try {
+      const result = await this.scope.current().collection(collectionName).doc(id).get();
+      return result.data ?? null;
+    } catch (error) {
+      if (isMissingDocument(error)) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  protected async removeExpired(collectionName: string, now: string): Promise<number> {
+    let removed = 0;
+    for (;;) {
+      const result = await this.scope
+        .current()
+        .collection(collectionName)
+        .where({ expiresAt: this.scope.database.command.lt(now) })
+        .limit(100)
+        .get();
+      const documents = Array.isArray(result.data) ? result.data : [];
+      const ids = documents
+        .map((document) => (isRecord(document) ? document._id : undefined))
+        .filter((id): id is string => typeof id === "string");
+      if (ids.length === 0) {
+        return removed;
+      }
+      for (const id of ids) {
+        await this.scope.current().collection(collectionName).doc(id).remove();
+      }
+      removed += ids.length;
+      if (ids.length < 100) {
+        return removed;
+      }
+    }
+  }
+}
+
+class WechatGenerationTaskRepository
+  extends WechatCloudRepositoryBase
+  implements GenerationTaskRepository
+{
+  async findById(
+    ownerId: string,
+    jobId: string,
+    now: string,
+  ): Promise<GenerationTaskRecord | null> {
+    const record = parseTask(
+      await this.read(
+        applicationCollectionNames.generationTasks,
+        documentId("job", [ownerId, jobId]),
+      ),
+    );
+    return record && !isExpired(record.expiresAt, now) ? record : null;
+  }
+
+  async create(record: GenerationTaskRecord): Promise<boolean> {
+    const id = documentId("job", [record.ownerId, record.jobId]);
+    if (await this.read(applicationCollectionNames.generationTasks, id)) {
+      return false;
+    }
+    await this.scope
+      .current()
+      .collection(applicationCollectionNames.generationTasks)
+      .doc(id)
+      .set({ data: record });
+    return true;
+  }
+
+  async update(record: GenerationTaskRecord): Promise<boolean> {
+    const id = documentId("job", [record.ownerId, record.jobId]);
+    if (!(await this.read(applicationCollectionNames.generationTasks, id))) {
+      return false;
+    }
+    await this.scope
+      .current()
+      .collection(applicationCollectionNames.generationTasks)
+      .doc(id)
+      .set({ data: record });
+    return true;
+  }
+
+  deleteExpired(now: string): Promise<number> {
+    return this.removeExpired(applicationCollectionNames.generationTasks, now);
+  }
+}
+
+class WechatIdempotencyRepository
+  extends WechatCloudRepositoryBase
+  implements IdempotencyRepository
+{
+  async find(
+    ownerId: string,
+    action: IdempotencyAction,
+    key: string,
+    now: string,
+  ): Promise<IdempotencyRecord | null> {
+    const record = parseIdempotency(
+      await this.read(
+        applicationCollectionNames.idempotency,
+        documentId("idem", [ownerId, action, key]),
+      ),
+    );
+    return record && !isExpired(record.expiresAt, now) ? record : null;
+  }
+
+  async create(record: IdempotencyRecord): Promise<boolean> {
+    const id = documentId("idem", [record.ownerId, record.action, record.key]);
+    if (await this.read(applicationCollectionNames.idempotency, id)) {
+      return false;
+    }
+    await this.scope
+      .current()
+      .collection(applicationCollectionNames.idempotency)
+      .doc(id)
+      .set({ data: record });
+    return true;
+  }
+
+  deleteExpired(now: string): Promise<number> {
+    return this.removeExpired(applicationCollectionNames.idempotency, now);
+  }
+}
+
+interface StoredQuotaUsage {
+  readonly scope: TrialQuotaScope;
+  readonly subjectId: string;
+  readonly kind: TrialQuotaKind;
+  readonly day: string;
+  readonly used: number;
+  readonly updatedAt: string;
+}
+
+function quotaId(
+  scope: TrialQuotaScope,
+  subjectId: string,
+  kind: TrialQuotaKind,
+  day: string,
+): string {
+  return documentId("quota", [scope, subjectId, kind, day]);
+}
+
+function parseQuotaUsage(value: unknown): StoredQuotaUsage | null {
+  if (
+    !isRecord(value) ||
+    (value.scope !== "user" && value.scope !== "global") ||
+    typeof value.subjectId !== "string" ||
+    (value.kind !== "analysis" && value.kind !== "generation") ||
+    typeof value.day !== "string" ||
+    typeof value.used !== "number" ||
+    !Number.isInteger(value.used) ||
+    value.used < 0 ||
+    typeof value.updatedAt !== "string"
+  ) {
+    return null;
+  }
+  return {
+    scope: value.scope,
+    subjectId: value.subjectId,
+    kind: value.kind,
+    day: value.day,
+    used: value.used,
+    updatedAt: value.updatedAt,
+  };
+}
+
+function reservationKey(reservation: TrialQuotaReservation): string {
+  return JSON.stringify([
+    reservation.scope,
+    reservation.subjectId,
+    reservation.kind,
+    reservation.day,
+  ]);
+}
+
+class WechatTrialQuotaRepository extends WechatCloudRepositoryBase implements TrialQuotaRepository {
+  async reserveMany(
+    reservations: readonly TrialQuotaReservation[],
+  ): Promise<TrialQuotaReservationResult> {
+    if (this.scope.current() === this.scope.database) {
+      return this.scope.run(() => this.reserveMany(reservations));
+    }
+
+    const combined = new Map<string, TrialQuotaReservation>();
+    for (const reservation of reservations) {
+      if (!Number.isInteger(reservation.amount) || reservation.amount <= 0) {
+        throw new Error("额度预占数量必须是正整数。");
+      }
+      if (!Number.isInteger(reservation.limit) || reservation.limit < 0) {
+        throw new Error("额度上限必须是非负整数。");
+      }
+      const key = reservationKey(reservation);
+      const existing = combined.get(key);
+      if (existing && existing.limit !== reservation.limit) {
+        throw new Error("同一额度维度不能使用不同的上限。");
+      }
+      combined.set(key, {
+        ...reservation,
+        amount: (existing?.amount ?? 0) + reservation.amount,
+      });
+    }
+
+    const normalized = [...combined.values()];
+    const usages: number[] = [];
+    for (const reservation of normalized) {
+      usages.push(
+        await this.getUsage(
+          reservation.scope,
+          reservation.subjectId,
+          reservation.kind,
+          reservation.day,
+        ),
+      );
+    }
+    const snapshots: TrialQuotaSnapshot[] = normalized.map((reservation, index) => ({
+      scope: reservation.scope,
+      subjectId: reservation.subjectId,
+      kind: reservation.kind,
+      day: reservation.day,
+      used: usages[index] ?? 0,
+      limit: reservation.limit,
+    }));
+    const denied = snapshots.find(
+      (snapshot, index) =>
+        snapshot.limit > 0 && snapshot.used + (normalized[index]?.amount ?? 0) > snapshot.limit,
+    );
+    if (denied) {
+      return { allowed: false, denied, snapshots };
+    }
+
+    const updatedAt = new Date().toISOString();
+    for (const [index, reservation] of normalized.entries()) {
+      const used = (usages[index] ?? 0) + reservation.amount;
+      const data: StoredQuotaUsage = {
+        scope: reservation.scope,
+        subjectId: reservation.subjectId,
+        kind: reservation.kind,
+        day: reservation.day,
+        used,
+        updatedAt,
+      };
+      await this.scope
+        .current()
+        .collection(applicationCollectionNames.trialUsage)
+        .doc(quotaId(data.scope, data.subjectId, data.kind, data.day))
+        .set({ data });
+    }
+    return {
+      allowed: true,
+      snapshots: normalized.map((reservation, index) => ({
+        scope: reservation.scope,
+        subjectId: reservation.subjectId,
+        kind: reservation.kind,
+        day: reservation.day,
+        used: (usages[index] ?? 0) + reservation.amount,
+        limit: reservation.limit,
+      })),
+    };
+  }
+
+  async getUsage(
+    scope: TrialQuotaScope,
+    subjectId: string,
+    kind: TrialQuotaKind,
+    day: string,
+  ): Promise<number> {
+    const usage = parseQuotaUsage(
+      await this.read(applicationCollectionNames.trialUsage, quotaId(scope, subjectId, kind, day)),
+    );
+    return usage?.used ?? 0;
+  }
+}
+
+export function createWechatCloudApplicationPersistence(
+  database: WechatCloudDatabase,
+): WechatCloudApplicationPersistence {
+  const transactions = new WechatCloudTransactionScope(database);
+  return {
+    transactions,
+    tasks: new WechatGenerationTaskRepository(transactions),
+    idempotency: new WechatIdempotencyRepository(transactions),
+    quotas: new WechatTrialQuotaRepository(transactions),
+  };
+}

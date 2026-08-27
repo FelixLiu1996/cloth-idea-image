@@ -1,9 +1,22 @@
+import {
+  GenerationTaskAdmissionService,
+  MemoryGenerationTaskRepository,
+  MemoryIdempotencyRepository,
+  MemoryTransactionRunner,
+  MemoryTrialQuotaRepository,
+  type GenerationTaskAction,
+  type GenerationTaskAdmissionDependencies,
+  type GenerationTaskRecord,
+} from "@cloth-idea/application";
 import type {
   ApiErrorResponse,
   GenerationApiResponse,
   GenerationJobStatusResponse,
   SupportedImageMimeType,
 } from "@cloth-idea/domain";
+
+const localOwnerId = "local-trial";
+const localTaskExpiry = "9999-12-31T23:59:59.999Z";
 
 export interface StoredGenerationRecord {
   readonly response: GenerationApiResponse;
@@ -16,106 +29,139 @@ export interface StoredGenerationRecord {
   readonly revisionInstructions: readonly string[];
 }
 
-interface IdempotentJob {
-  readonly requestFingerprint: string;
-  readonly jobId: string;
-}
-
 export interface EnqueueGenerationJobInput {
   readonly jobId: string;
+  readonly action: GenerationTaskAction;
   readonly statusUrl: string;
   readonly createdAt: string;
   readonly idempotencyKey: string | undefined;
   readonly requestFingerprint: string;
-  readonly onAccepted?: () => void;
   readonly operation: () => Promise<StoredGenerationRecord>;
   readonly mapError: (error: unknown) => ApiErrorResponse;
 }
 
-export class IdempotencyKeyConflictError extends Error {
-  constructor() {
-    super("同一个幂等键不能用于不同的生成请求。");
-    this.name = "IdempotencyKeyConflictError";
-  }
+export interface GenerationResultRepositoryOptions {
+  readonly ownerId?: string;
+  readonly dailyGenerationLimit?: number;
+  readonly admissionDependencies?: GenerationTaskAdmissionDependencies;
+}
+
+function createMemoryAdmissionDependencies(): GenerationTaskAdmissionDependencies {
+  const tasks = new MemoryGenerationTaskRepository();
+  const idempotency = new MemoryIdempotencyRepository();
+  const quotas = new MemoryTrialQuotaRepository();
+  return {
+    tasks,
+    idempotency,
+    quotas,
+    transactions: new MemoryTransactionRunner([tasks, idempotency, quotas]),
+  };
 }
 
 export class GenerationResultRepository {
   private readonly recordsByJobId = new Map<string, StoredGenerationRecord>();
-  private readonly jobsById = new Map<string, GenerationJobStatusResponse>();
-  private readonly jobsByIdempotencyKey = new Map<string, IdempotentJob>();
+  private readonly ownerId: string;
+  private readonly dailyGenerationLimit: number;
+  private readonly dependencies: GenerationTaskAdmissionDependencies;
+  private readonly admission: GenerationTaskAdmissionService;
 
-  save(record: StoredGenerationRecord): void {
-    this.recordsByJobId.set(record.response.jobId, record);
-    this.jobsById.set(record.response.jobId, record.response);
+  constructor(options: GenerationResultRepositoryOptions = {}) {
+    this.ownerId = options.ownerId ?? localOwnerId;
+    this.dailyGenerationLimit = options.dailyGenerationLimit ?? 0;
+    this.dependencies = options.admissionDependencies ?? createMemoryAdmissionDependencies();
+    this.admission = new GenerationTaskAdmissionService(this.dependencies);
   }
 
   get(jobId: string): StoredGenerationRecord | null {
     return this.recordsByJobId.get(jobId) ?? null;
   }
 
-  getJob(jobId: string): GenerationJobStatusResponse | null {
-    return this.jobsById.get(jobId) ?? null;
+  async getJob(jobId: string): Promise<GenerationJobStatusResponse | null> {
+    const task = await this.dependencies.tasks.findById(
+      this.ownerId,
+      jobId,
+      new Date().toISOString(),
+    );
+    return task?.status ?? null;
   }
 
-  enqueueOnce(input: EnqueueGenerationJobInput): {
+  async enqueueOnce(input: EnqueueGenerationJobInput): Promise<{
     readonly job: GenerationJobStatusResponse;
     readonly reused: boolean;
-  } {
-    if (input.idempotencyKey) {
-      const existingJob = this.jobsByIdempotencyKey.get(input.idempotencyKey);
-      if (existingJob) {
-        if (existingJob.requestFingerprint !== input.requestFingerprint) {
-          throw new IdempotencyKeyConflictError();
-        }
-        const existingStatus = this.jobsById.get(existingJob.jobId);
-        if (!existingStatus) {
-          throw new Error("幂等任务状态不存在。");
-        }
-        return { job: existingStatus, reused: true };
-      }
-    }
-
-    input.onAccepted?.();
-
-    const queuedJob: GenerationJobStatusResponse = {
+  }> {
+    const admitted = await this.admission.admit({
+      ownerId: this.ownerId,
+      action: input.action,
+      // Fastify historically shared one namespace between initial and refinement keys.
+      idempotencyAction: "generation",
+      idempotencyKey: input.idempotencyKey,
+      requestFingerprint: input.requestFingerprint,
       jobId: input.jobId,
-      status: "queued",
       statusUrl: input.statusUrl,
       createdAt: input.createdAt,
-      updatedAt: input.createdAt,
-    };
-    this.jobsById.set(input.jobId, queuedJob);
-    if (input.idempotencyKey) {
-      this.jobsByIdempotencyKey.set(input.idempotencyKey, {
-        requestFingerprint: input.requestFingerprint,
-        jobId: input.jobId,
-      });
-    }
-
-    setImmediate(() => {
-      const generatingAt = new Date().toISOString();
-      this.jobsById.set(input.jobId, {
-        ...queuedJob,
-        status: "generating",
-        updatedAt: generatingAt,
-      });
-
-      void input
-        .operation()
-        .then((record) => {
-          this.save(record);
-        })
-        .catch((error: unknown) => {
-          this.jobsById.set(input.jobId, {
-            jobId: input.jobId,
-            status: "failed",
-            error: input.mapError(error),
-            createdAt: input.createdAt,
-            updatedAt: new Date().toISOString(),
-          });
-        });
+      expiresAt: localTaskExpiry,
+      quotaReservations: [
+        {
+          scope: "global",
+          subjectId: localOwnerId,
+          kind: "generation",
+          day: input.createdAt.slice(0, 10),
+          amount: 1,
+          limit: this.dailyGenerationLimit,
+        },
+      ],
     });
 
-    return { job: queuedJob, reused: false };
+    if (!admitted.reused) {
+      this.scheduleOperation(admitted.task, input);
+    }
+    return { job: admitted.task.status, reused: admitted.reused };
+  }
+
+  private scheduleOperation(task: GenerationTaskRecord, input: EnqueueGenerationJobInput): void {
+    setImmediate(() => {
+      void this.runOperation(task, input);
+    });
+  }
+
+  private async runOperation(
+    queuedTask: GenerationTaskRecord,
+    input: EnqueueGenerationJobInput,
+  ): Promise<void> {
+    const generatingAt = new Date().toISOString();
+    await this.dependencies.tasks.update({
+      ...queuedTask,
+      status: {
+        jobId: input.jobId,
+        status: "generating",
+        statusUrl: input.statusUrl,
+        createdAt: input.createdAt,
+        updatedAt: generatingAt,
+      },
+      updatedAt: generatingAt,
+    });
+
+    try {
+      const record = await input.operation();
+      this.recordsByJobId.set(record.response.jobId, record);
+      await this.dependencies.tasks.update({
+        ...queuedTask,
+        status: record.response,
+        updatedAt: new Date().toISOString(),
+      });
+    } catch (error: unknown) {
+      const failedAt = new Date().toISOString();
+      await this.dependencies.tasks.update({
+        ...queuedTask,
+        status: {
+          jobId: input.jobId,
+          status: "failed",
+          error: input.mapError(error),
+          createdAt: input.createdAt,
+          updatedAt: failedAt,
+        },
+        updatedAt: failedAt,
+      });
+    }
   }
 }

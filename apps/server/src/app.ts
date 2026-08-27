@@ -2,6 +2,7 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 
 import cors from "@fastify/cors";
 import multipart, { type MultipartFile } from "@fastify/multipart";
+import { IdempotencyConflictError, TrialQuotaExceededError } from "@cloth-idea/application";
 import {
   buildGarmentPrompt,
   compileAnalyzedGarmentPrompt,
@@ -34,11 +35,7 @@ import { z } from "zod";
 import { LocalAssetStore } from "./asset-store";
 import type { ServerConfig } from "./config";
 import { GarmentAnalysisRepository } from "./garment-analysis-repository";
-import {
-  GenerationResultRepository,
-  IdempotencyKeyConflictError,
-  type StoredGenerationRecord,
-} from "./generation-repository";
+import { GenerationResultRepository, type StoredGenerationRecord } from "./generation-repository";
 import { TrialUsageLimitError, TrialUsagePolicy } from "./trial-usage-policy";
 
 const generationFieldsSchema = z.object({
@@ -176,11 +173,16 @@ function normalizeError(error: unknown): NormalizedError {
     code = error.code;
     message = error.message;
     retryable = error.retryable;
-  } else if (error instanceof IdempotencyKeyConflictError) {
+  } else if (error instanceof IdempotencyConflictError) {
     statusCode = 409;
-    code = "IDEMPOTENCY_KEY_REUSED";
+    code = error.code;
     message = error.message;
     retryable = false;
+  } else if (error instanceof TrialQuotaExceededError) {
+    statusCode = error.statusCode;
+    code = error.code;
+    message = error.message;
+    retryable = error.retryable;
   } else if (error instanceof TrialUsageLimitError) {
     statusCode = error.statusCode;
     code = error.code;
@@ -285,12 +287,15 @@ interface RunGenerationOptions {
 export async function buildApp(options: BuildAppOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: options.logger ?? false });
   const assetStore = options.assetStore ?? new LocalAssetStore(options.config.assetDirectory);
-  const repository = options.repository ?? new GenerationResultRepository();
+  const repository =
+    options.repository ??
+    new GenerationResultRepository({
+      dailyGenerationLimit: options.config.trialDailyGenerationLimit,
+    });
   const analysisRepository = options.analysisRepository ?? new GarmentAnalysisRepository();
   const analyzer = options.analyzer ?? new UnconfiguredGarmentAnalysisProvider();
   const trialUsagePolicy = new TrialUsagePolicy({
     dailyAnalysisLimit: options.config.trialDailyAnalysisLimit,
-    dailyGenerationLimit: options.config.trialDailyGenerationLimit,
     maxConcurrentModelRequests: options.config.trialMaxConcurrentModelRequests,
     generationMinIntervalMs: options.config.trialGenerationMinIntervalMs,
   });
@@ -376,20 +381,20 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     return record;
   }
 
-  function enqueueGeneration(
+  async function enqueueGeneration(
     request: FastifyRequest,
     requestFingerprint: string,
     input: RunGenerationOptions,
-  ): { readonly job: GenerationJobStatusResponse; readonly reused: boolean } {
+  ): Promise<{ readonly job: GenerationJobStatusResponse; readonly reused: boolean }> {
     const jobId = randomUUID();
     const createdAt = new Date().toISOString();
-    const execution = repository.enqueueOnce({
+    const execution = await repository.enqueueOnce({
       jobId,
+      action: input.operation === "refine" ? "refinement" : "generation",
       statusUrl: `${options.config.publicBaseUrl}/api/v1/generations/${jobId}`,
       createdAt,
       idempotencyKey: readIdempotencyKey(request),
       requestFingerprint,
-      onAccepted: () => trialUsagePolicy.reserveGeneration(),
       operation: () =>
         trialUsagePolicy.runGeneration(() => runGeneration(request, jobId, createdAt, input)),
       mapError: (error) => {
@@ -577,7 +582,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       operation = "regenerate";
     }
 
-    const execution = enqueueGeneration(
+    const execution = await enqueueGeneration(
       request,
       createRequestFingerprint({
         type: "generation",
@@ -607,7 +612,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   });
 
   app.get<{ Params: { jobId: string } }>("/api/v1/generations/:jobId", async (request, reply) => {
-    const job = repository.getJob(request.params.jobId);
+    const job = await repository.getJob(request.params.jobId);
     if (!job) {
       throw new RequestError(404, "GENERATION_JOB_NOT_FOUND", "生成任务不存在或已经过期。");
     }
@@ -664,7 +669,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
         instruction: parsedBody.data.instruction,
         sourceImageSha256: sourceImageFingerprint,
       });
-      const execution = enqueueGeneration(request, requestFingerprint, {
+      const execution = await enqueueGeneration(request, requestFingerprint, {
         sourceImage,
         prompt,
         promptVersion: "garment-iteration-v1",

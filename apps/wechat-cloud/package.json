@@ -8,6 +8,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@cloth-idea/application": "*",
     "@cloth-idea/domain": "*"
   },
   "devDependencies": {

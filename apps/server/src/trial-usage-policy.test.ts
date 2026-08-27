@@ -7,7 +7,6 @@ function createPolicy(
 ): TrialUsagePolicy {
   return new TrialUsagePolicy({
     dailyAnalysisLimit: 2,
-    dailyGenerationLimit: 2,
     maxConcurrentModelRequests: 1,
     generationMinIntervalMs: 0,
     ...overrides,
@@ -19,20 +18,14 @@ afterEach(() => {
 });
 
 describe("TrialUsagePolicy", () => {
-  it("enforces separate daily analysis and generation limits", () => {
-    const policy = createPolicy({ dailyAnalysisLimit: 1, dailyGenerationLimit: 1 });
+  it("enforces the daily analysis limit", () => {
+    const policy = createPolicy({ dailyAnalysisLimit: 1 });
 
     policy.reserveAnalysis();
-    policy.reserveGeneration();
 
     expect(() => policy.reserveAnalysis()).toThrowError(
       expect.objectContaining<Partial<TrialUsageLimitError>>({
         code: "RATE_LIMIT_DAILY_ANALYSIS_REACHED",
-      }),
-    );
-    expect(() => policy.reserveGeneration()).toThrowError(
-      expect.objectContaining<Partial<TrialUsageLimitError>>({
-        code: "RATE_LIMIT_DAILY_GENERATION_REACHED",
       }),
     );
   });

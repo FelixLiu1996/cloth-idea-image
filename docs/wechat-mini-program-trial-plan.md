@@ -103,8 +103,8 @@ garment-results/{openid-hash}/{jobId}/result.{ext}
 
 1. 已完成：新增 `GarmentGateway`，把现有 HTTP 实现收敛为可替换网关，保持 H5 行为不变。
 2. 部分完成：建立 `WechatCloudGarmentGateway`、云开发配置校验和可替换入口；能力查询已接入 `garment-api`，模型业务方法仍返回明确的“尚未部署”错误。
-3. 部分完成：新增 `@cloth-idea/application`，先抽出持久幂等、用户/全局额度预占和排队任务创建用例；Fastify 现有路由与云函数业务动作尚未切换到该用例。
-4. 部分完成：分析、任务、幂等、额度和资产仓储接口及内存 Fake 已完成，并覆盖并发重试、冲突、回滚、用户隔离和过期；微信云数据库与云存储适配器尚未实现。
+3. 部分完成：新增 `@cloth-idea/application`，抽出持久幂等、用户/全局额度预占和排队任务创建用例；Fastify 首次生成与继续修改已切换，云函数业务动作尚未接入。
+4. 部分完成：分析、任务、幂等、额度和资产仓储接口及内存 Fake 已完成；微信云数据库的任务、幂等和额度事务适配器也已完成 Fake 契约测试，分析与云存储资产适配器尚未实现。
 5. 保持 `npm run build`、`npm run build:weapp` 和现有自动化测试通过。
 
 ### 阶段 B：需要 AppID 和云环境 ID

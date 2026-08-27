@@ -100,6 +100,17 @@ describe("GenerationTaskAdmissionService", () => {
     ).resolves.toBe(1);
   });
 
+  it("allows requests without an idempotency key while still reserving quota", async () => {
+    const harness = createHarness();
+
+    const result = await harness.service.admit(input({ idempotencyKey: undefined }));
+
+    expect(result.reused).toBe(false);
+    await expect(
+      harness.quotas.getUsage("user", "viewer-a", "generation", "2026-08-27"),
+    ).resolves.toBe(1);
+  });
+
   it("keeps idempotency across service recreation", async () => {
     const harness = createHarness();
     await harness.service.admit(input());
@@ -149,6 +160,9 @@ describe("GenerationTaskAdmissionService", () => {
     await expect(
       harness.tasks.findById(overQuota.ownerId, overQuota.jobId, createdAt),
     ).resolves.toBeNull();
+    if (!overQuota.idempotencyKey) {
+      throw new Error("test requires an idempotency key");
+    }
     await expect(
       harness.idempotency.find(
         overQuota.ownerId,
@@ -174,6 +188,9 @@ describe("GenerationTaskAdmissionService", () => {
     await expect(
       harness.quotas.getUsage("user", "viewer-a", "generation", "2026-08-27"),
     ).resolves.toBe(1);
+    if (!conflictingTask.idempotencyKey) {
+      throw new Error("test requires an idempotency key");
+    }
     await expect(
       harness.idempotency.find(
         conflictingTask.ownerId,

@@ -18,7 +18,7 @@ await build({
   platform: "node",
   target: "node20",
   bundle: true,
-  noExternal: ["@cloth-idea/domain"],
+  noExternal: ["@cloth-idea/application", "@cloth-idea/domain"],
   clean: false,
   sourcemap: false,
   minify: false,
