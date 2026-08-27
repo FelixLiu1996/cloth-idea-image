@@ -11,6 +11,7 @@ import {
   type WechatCloudDatabase,
 } from "./cloud-application-persistence";
 import { WechatCloudGarmentAssetStorage } from "./cloud-asset-storage";
+import { createGarmentCloudBusinessHandler, isWechatCloudBusinessAction } from "./business-handler";
 
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV as unknown as string });
 
@@ -36,6 +37,34 @@ export const garmentAssetStorage = new WechatCloudGarmentAssetStorage({
 const trialMembers = database.collection("trial_members");
 const infrastructureProbes = database.collection("infrastructure_probes");
 const supportedMimeTypes = new Set<string>(supportedImageMimeTypes);
+
+function readNonNegativeInteger(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") {
+    return fallback;
+  }
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`${name} must be a non-negative integer`);
+  }
+  return parsed;
+}
+
+function readPositiveInteger(name: string, fallback: number): number {
+  const value = readNonNegativeInteger(name, fallback);
+  if (value === 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return value;
+}
+
+const trialLimits = {
+  analysis: readNonNegativeInteger("TRIAL_DAILY_ANALYSIS_LIMIT", 5),
+  generation: readNonNegativeInteger("TRIAL_DAILY_GENERATION_LIMIT", 10),
+  globalAnalysis: readNonNegativeInteger("TRIAL_GLOBAL_DAILY_ANALYSIS_LIMIT", 100),
+  globalGeneration: readNonNegativeInteger("TRIAL_GLOBAL_DAILY_GENERATION_LIMIT", 200),
+  retentionHours: readPositiveInteger("ASSET_RETENTION_HOURS", 72),
+} as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -78,25 +107,27 @@ function isMissingDocument(error: unknown): boolean {
   return candidate.errCode === -1 || candidate.code === "DATABASE_REQUEST_DOCUMENT_NOT_FOUND";
 }
 
+async function isTrialMember(viewerFingerprint: string): Promise<boolean> {
+  try {
+    const result = await trialMembers.doc(viewerFingerprint).get();
+    const data = (result as { readonly data?: unknown }).data;
+    return (
+      typeof data === "object" &&
+      data !== null &&
+      (data as { readonly active?: unknown }).active === true
+    );
+  } catch (error) {
+    if (isMissingDocument(error)) {
+      return false;
+    }
+    throw error;
+  }
+}
+
 const handler = createGarmentCloudHandler({
   getOpenId: () => cloud.getWXContext().OPENID,
   repository: {
-    async isTrialMember(viewerFingerprint) {
-      try {
-        const result = await trialMembers.doc(viewerFingerprint).get();
-        const data = (result as { readonly data?: unknown }).data;
-        return (
-          typeof data === "object" &&
-          data !== null &&
-          (data as { readonly active?: unknown }).active === true
-        );
-      } catch (error) {
-        if (isMissingDocument(error)) {
-          return false;
-        }
-        throw error;
-      }
-    },
+    isTrialMember,
     async findInfrastructureProbe(probeId) {
       try {
         const result = await infrastructureProbes.doc(probeId).get();
@@ -119,8 +150,26 @@ const handler = createGarmentCloudHandler({
   deleteCloudFile: (cloudFileId) => garmentAssetStorage.delete(cloudFileId),
   now: () => new Date().toISOString(),
   createRequestId: createDefaultRequestId,
+  trialDailyAnalysisLimit: trialLimits.analysis,
+  trialDailyGenerationLimit: trialLimits.generation,
+  assetRetentionHours: trialLimits.retentionHours,
+});
+
+const businessHandler = createGarmentCloudBusinessHandler({
+  getOpenId: () => cloud.getWXContext().OPENID,
+  isTrialMember,
+  persistence: applicationPersistence,
+  storage: garmentAssetStorage,
+  fakeProviderEnabled: process.env.WECHAT_CLOUD_BUSINESS_PROVIDER === "fake",
+  now: () => new Date().toISOString(),
+  createRequestId: createDefaultRequestId,
+  trialDailyAnalysisLimit: trialLimits.analysis,
+  trialDailyGenerationLimit: trialLimits.generation,
+  globalDailyAnalysisLimit: trialLimits.globalAnalysis,
+  globalDailyGenerationLimit: trialLimits.globalGeneration,
+  assetRetentionHours: trialLimits.retentionHours,
 });
 
 export async function main(event: unknown): Promise<unknown> {
-  return handler(event);
+  return isWechatCloudBusinessAction(event) ? businessHandler(event) : handler(event);
 }

@@ -1,4 +1,9 @@
-import type { ApiErrorResponse, SupportedImageMimeType } from "./generation";
+import type { GarmentAnalysisApiResponse, GarmentAnalysisBrief } from "./garment-analysis";
+import type {
+  ApiErrorResponse,
+  GenerationJobStatusResponse,
+  SupportedImageMimeType,
+} from "./generation";
 
 export interface WechatCloudCapabilities {
   readonly transport: "wechat-cloud";
@@ -48,14 +53,57 @@ export interface DeleteWechatCloudInfrastructureProbeRequest {
   readonly probeId: string;
 }
 
+export interface WechatCloudSourceImageReference {
+  readonly idempotencyKey: string;
+  readonly cloudFileId: string;
+  readonly fileName: string;
+  readonly mimeType: SupportedImageMimeType;
+  readonly size: number;
+}
+
+export interface CreateWechatCloudGarmentAnalysisRequest extends WechatCloudSourceImageReference {
+  readonly action: "analyze-garment";
+  readonly brief: GarmentAnalysisBrief;
+}
+
+export interface CreateWechatCloudGenerationRequest extends WechatCloudSourceImageReference {
+  readonly action: "create-generation";
+  readonly brief: GarmentAnalysisBrief;
+  readonly analysisId?: string;
+  readonly directionId?: string;
+  readonly parentJobId?: string;
+}
+
+export interface CreateWechatCloudRefinementRequest extends WechatCloudSourceImageReference {
+  readonly action: "create-refinement";
+  readonly parentJobId: string;
+  readonly instruction: string;
+}
+
+export interface GetWechatCloudGenerationJobRequest {
+  readonly action: "get-generation-job";
+  readonly jobId: string;
+}
+
+export type WechatCloudBusinessRequest =
+  | CreateWechatCloudGarmentAnalysisRequest
+  | CreateWechatCloudGenerationRequest
+  | CreateWechatCloudRefinementRequest
+  | GetWechatCloudGenerationJobRequest;
+
 export type WechatCloudRequest =
   | GetWechatCloudCapabilitiesRequest
   | CreateWechatCloudInfrastructureProbeRequest
   | GetWechatCloudInfrastructureProbeRequest
-  | DeleteWechatCloudInfrastructureProbeRequest;
+  | DeleteWechatCloudInfrastructureProbeRequest
+  | WechatCloudBusinessRequest;
 
 export type WechatCloudSuccessData =
-  WechatCloudCapabilities | WechatCloudInfrastructureProbe | WechatCloudInfrastructureProbeDeletion;
+  | WechatCloudCapabilities
+  | WechatCloudInfrastructureProbe
+  | WechatCloudInfrastructureProbeDeletion
+  | GarmentAnalysisApiResponse
+  | GenerationJobStatusResponse;
 
 export interface WechatCloudSuccessResponse {
   readonly ok: true;

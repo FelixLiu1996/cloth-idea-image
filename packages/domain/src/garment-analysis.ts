@@ -158,7 +158,7 @@ export interface GarmentAnalysisProviderInput {
 }
 
 export interface GarmentAnalysisProviderResult {
-  readonly provider: "alibaba-qwen-vl";
+  readonly provider: "alibaba-qwen-vl" | "testing-fake";
   readonly model: string;
   readonly providerRequestId: string | null;
   readonly durationMs: number;

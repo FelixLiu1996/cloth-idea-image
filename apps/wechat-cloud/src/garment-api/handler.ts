@@ -3,11 +3,13 @@ import { createHash, randomUUID } from "node:crypto";
 import type {
   ApiErrorResponse,
   CreateWechatCloudInfrastructureProbeRequest,
+  DeleteWechatCloudInfrastructureProbeRequest,
+  GetWechatCloudCapabilitiesRequest,
+  GetWechatCloudInfrastructureProbeRequest,
   SupportedImageMimeType,
   WechatCloudCapabilities,
   WechatCloudInfrastructureProbe,
   WechatCloudInfrastructureProbeDeletion,
-  WechatCloudRequest,
   WechatCloudResponse,
 } from "@cloth-idea/domain";
 
@@ -32,6 +34,9 @@ export interface GarmentCloudHandlerDependencies {
   readonly deleteCloudFile: (cloudFileId: string) => Promise<void>;
   readonly now: () => string;
   readonly createRequestId: () => string;
+  readonly trialDailyAnalysisLimit?: number;
+  readonly trialDailyGenerationLimit?: number;
+  readonly assetRetentionHours?: number;
 }
 
 function hash(value: string, length = 32): string {
@@ -57,7 +62,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function parseRequest(value: unknown): WechatCloudRequest | null {
+type WechatCloudDiagnosticRequest =
+  | GetWechatCloudCapabilitiesRequest
+  | CreateWechatCloudInfrastructureProbeRequest
+  | GetWechatCloudInfrastructureProbeRequest
+  | DeleteWechatCloudInfrastructureProbeRequest;
+
+function parseRequest(value: unknown): WechatCloudDiagnosticRequest | null {
   if (!isRecord(value) || typeof value.action !== "string") {
     return null;
   }
@@ -164,9 +175,9 @@ export function createGarmentCloudHandler(dependencies: GarmentCloudHandlerDepen
           authorized,
           viewerFingerprint,
           trialAccessRequired: false,
-          trialDailyAnalysisLimit: 0,
-          trialDailyGenerationLimit: 0,
-          assetRetentionHours: 0,
+          trialDailyAnalysisLimit: dependencies.trialDailyAnalysisLimit ?? 0,
+          trialDailyGenerationLimit: dependencies.trialDailyGenerationLimit ?? 0,
+          assetRetentionHours: dependencies.assetRetentionHours ?? 0,
         };
         return { ok: true, data: capabilities };
       }

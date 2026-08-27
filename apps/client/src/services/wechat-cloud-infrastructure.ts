@@ -59,11 +59,11 @@ function parseProbeDeletion(value: unknown): WechatCloudInfrastructureProbeDelet
   return value as unknown as WechatCloudInfrastructureProbeDeletion;
 }
 
-function createIdempotencyKey(): string {
+export function createWechatCloudIdempotencyKey(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-function imageMetadata(path: string): {
+export function getWechatCloudImageMetadata(path: string): {
   readonly extension: "jpg" | "png" | "webp";
   readonly mimeType: SupportedImageMimeType;
 } {
@@ -100,8 +100,8 @@ export async function createWechatCloudInfrastructureProbe(
       false,
     );
   }
-  const idempotencyKey = createIdempotencyKey();
-  const metadata = imageMetadata(image.path);
+  const idempotencyKey = createWechatCloudIdempotencyKey();
+  const metadata = getWechatCloudImageMetadata(image.path);
   const fileName = `source.${metadata.extension}`;
   const upload = await client.uploadFile({
     cloudPath: `garment-source-temp/${capabilities.viewerFingerprint}/incoming/${idempotencyKey}.${metadata.extension}`,

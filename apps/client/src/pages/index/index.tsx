@@ -106,6 +106,26 @@ export default function Index() {
     };
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    void garmentGateway
+      .restorePendingGeneration()
+      .then((restored) => {
+        if (!active || !restored) {
+          return;
+        }
+        setResults((current) =>
+          current.some((item) => item.jobId === restored.jobId) ? current : [...current, restored],
+        );
+        setActiveJobId(restored.jobId);
+        setSelectedDirectionId(restored.directionId);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const busy = analyzing || generating || refining;
   const canRequest = useMemo(
     () =>
@@ -153,6 +173,7 @@ export default function Index() {
     }
     return {
       imagePath: image.path,
+      imageSize: image.size,
       mode,
       preserveItems,
       changeRequest,
@@ -256,6 +277,7 @@ export default function Index() {
       const nextResult = await garmentGateway.refineGeneration({
         parentJobId: activeResult.jobId,
         imagePath: image.path,
+        imageSize: image.size,
         instruction,
         ...(trialAccessCode.trim() ? { accessCode: trialAccessCode.trim() } : {}),
       });

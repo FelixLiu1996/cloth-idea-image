@@ -7,6 +7,7 @@ import type {
 
 export interface CreateGenerationRequest {
   readonly imagePath: string;
+  readonly imageSize?: number;
   readonly mode: GenerationMode;
   readonly preserveItems: string;
   readonly changeRequest: string;
@@ -21,6 +22,7 @@ export interface CreateGenerationRequest {
 export interface RefineGenerationRequest {
   readonly parentJobId: string;
   readonly imagePath: string;
+  readonly imageSize?: number;
   readonly instruction: string;
   readonly accessCode?: string;
 }
@@ -47,5 +49,6 @@ export interface GarmentGateway {
   analyzeGarment(input: CreateGenerationRequest): Promise<GarmentAnalysisApiResponse>;
   createGeneration(input: CreateGenerationRequest): Promise<GenerationApiResponse>;
   refineGeneration(input: RefineGenerationRequest): Promise<GenerationApiResponse>;
+  restorePendingGeneration(): Promise<GenerationApiResponse | null>;
   getTrialCapabilities(): Promise<TrialCapabilities>;
 }

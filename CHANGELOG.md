@@ -27,6 +27,8 @@
 
 ### Added
 
+- 增加受环境开关保护的微信云 Fake Provider 业务闭环：支持结构化分析、首次/再次生成、继续修改和任务查询，复用持久任务、幂等、额度与资产仓储；Fake 结果明确标记为测试数据且不调用付费模型。
+- `WechatCloudGarmentGateway` 接入云存储上传、同幂等键传输重试、任务轮询和未完成 jobId 的设备恢复；页面重进后继续查询任务，`cloud://` 结果使用微信云 SDK 下载并保存。
 - 增加微信云数据库 `garment_analyses` 与 `garment_assets` 适配器，以及按用户和资产编号构造受控路径的云文件上传、下载、删除适配器；测试覆盖用户隔离、跨实例恢复、过期、主动删除和不安全路径拒绝。
 - 增加微信云数据库 `generation_jobs`、`idempotency_records`、`trial_usage` 事务适配器；Fake 数据库契约测试覆盖并发幂等、跨适配器实例恢复、额度原子预占/回滚、状态更新和过期删除。
 - 增加跨 Fastify 与微信云函数复用的 `@cloth-idea/application` 工作区，定义分析、生成任务、幂等、用户/全局额度和资产仓储端口，并提供带事务回滚的内存 Fake。
@@ -75,6 +77,7 @@
 
 ### Security
 
+- 微信云业务动作默认关闭；只有云函数显式设置 `WECHAT_CLOUD_BUSINESS_PROVIDER=fake` 才启用无模型 Fake 路径，未配置时返回稳定 `CLOUD_BACKEND_NOT_DEPLOYED`，不会静默触发模型或产生模型费用。
 - 无模型费用探针已在独立云环境完成主动清理验收；测试图片的原云存储路径返回404，对应 `infrastructure_probes` 记录查询为空。
 - 微信云环境中的 `trial_members` 与 `infrastructure_probes` 已设置为 `ADMINONLY`，小程序客户端不能绕过云函数直接读写白名单或探针记录；云存储保持仅上传者和管理员可访问的 `PRIVATE` 权限。
 - 微信云端响应只返回 OpenID 的截断 SHA-256 指纹；临时上传路径绑定该指纹，云函数在持久化和删除前再次校验白名单、路径归属、类型、大小和幂等键。

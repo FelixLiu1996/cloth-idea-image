@@ -248,5 +248,6 @@ export const httpGarmentGateway: GarmentGateway = {
   analyzeGarment,
   createGeneration,
   refineGeneration,
+  restorePendingGeneration: () => Promise.resolve(null),
   getTrialCapabilities,
 };

@@ -29,6 +29,11 @@ export async function selectGarmentImage(): Promise<SelectedImage | null> {
 }
 
 export async function saveGeneratedImage(imageUrl: string): Promise<void> {
+  if (imageUrl.startsWith("cloud://")) {
+    const downloaded = await Taro.cloud.downloadFile({ fileID: imageUrl });
+    await Taro.saveImageToPhotosAlbum({ filePath: downloaded.tempFilePath });
+    return;
+  }
   const downloaded = await Taro.downloadFile({
     url: imageUrl,
     withCredentials: false,

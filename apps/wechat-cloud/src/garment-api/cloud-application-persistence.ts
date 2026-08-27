@@ -124,7 +124,7 @@ function parseAnalysisResponse(value: unknown): GarmentAnalysisApiResponse | nul
     !isRecord(value) ||
     typeof value.analysisId !== "string" ||
     value.status !== "succeeded" ||
-    value.provider !== "alibaba-qwen-vl" ||
+    (value.provider !== "alibaba-qwen-vl" && value.provider !== "testing-fake") ||
     typeof value.model !== "string" ||
     typeof value.durationMs !== "number" ||
     !Number.isFinite(value.durationMs) ||
@@ -254,7 +254,8 @@ function parseGenerationStatus(value: unknown): GenerationJobStatusResponse | nu
     value.status !== "succeeded" ||
     (value.provider !== "alibaba-wan" &&
       value.provider !== "alibaba-qwen-image" &&
-      value.provider !== "volcengine-seedream") ||
+      value.provider !== "volcengine-seedream" &&
+      value.provider !== "testing-fake") ||
     typeof value.model !== "string" ||
     typeof value.resultUrl !== "string" ||
     typeof value.summary !== "string" ||

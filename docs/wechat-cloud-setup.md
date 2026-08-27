@@ -14,7 +14,7 @@
   → 删除云文件和数据库记录
 ```
 
-对应代码、自动化测试和独立云环境验证均已完成。这不是完整服装改款云端链路，分析、生图、任务轮询、持久额度和模型结果转存仍未迁移。
+对应探针代码、自动化测试和独立云环境验证均已完成。这不是完整服装改款云端链路。仓库后续已经增加分析、生成、任务轮询、持久额度和测试结果转存的 Fake Provider 代码，但尚未在真实环境部署或验收；真实 Qwen/生图模型仍未迁移。
 
 ## 2. 固定环境
 
@@ -128,3 +128,45 @@ garment-source-temp/{viewerFingerprint}/incoming/{idempotencyKey}.{ext}
 - 已通过同一云函数主动删除测试云文件和探针记录；随后数据库按探针 ID 查询返回空，原云存储路径返回404。该删除不可恢复，当前测试环境未遗留这张图片或探针记录。
 
 首次云端调用曾因构建产物残留 `require("@cloth-idea/domain")` 而在函数入口前失败；打包规则和构建期检查已经修复。函数重建后仍能读取原探针记录，证明记录保存在云数据库而不是函数实例内。
+
+## 9. 下一轮 Fake Provider 业务验收（尚未执行）
+
+当前仓库已经实现不调用模型的 Fake Provider 业务路径，但截至2026-08-27尚未部署到真实云环境。该路径只验证业务协议、持久任务、幂等、额度、结果转存和重进恢复；分析结果会明确显示“未调用视觉模型”，生成结果只是原图副本，不代表真实设计效果。
+
+在真实环境验收前，先创建以下五张集合并全部设置为 `ADMINONLY`：
+
+- `garment_analyses`
+- `garment_assets`
+- `generation_jobs`
+- `idempotency_records`
+- `trial_usage`
+
+然后在 `garment-api` 云函数环境变量中设置：
+
+```text
+WECHAT_CLOUD_BUSINESS_PROVIDER=fake
+TRIAL_DAILY_ANALYSIS_LIMIT=5
+TRIAL_DAILY_GENERATION_LIMIT=10
+TRIAL_GLOBAL_DAILY_ANALYSIS_LIMIT=100
+TRIAL_GLOBAL_DAILY_GENERATION_LIMIT=200
+ASSET_RETENTION_HOURS=72
+```
+
+`WECHAT_CLOUD_BUSINESS_PROVIDER` 未设置为 `fake` 时，业务动作会返回 `CLOUD_BACKEND_NOT_DEPLOYED`；该默认关闭行为用于避免尚未验收的云端路径被误用。Fake 验收不需要配置任何 Qwen、万相或其他模型 Key。
+
+重新部署云函数后，用微信云网关构建小程序：
+
+```bash
+TARO_APP_GARMENT_GATEWAY_MODE=wechat-cloud npm run build:weapp
+```
+
+真机依次验证：
+
+1. 上传原图并获得三个明确标记为 Fake 的设计方向。
+2. 选择一个方向并生成；首次提交应创建持久任务，客户端随后查询到 `succeeded`。
+3. 对结果提出一次继续修改；结果仍是原图副本，但必须保留父任务和修改指令元数据。
+4. 在任务查询完成前退出并重新进入小程序，确认设备保存的 jobId 会继续查询，而不是重新提交。
+5. 保存 `cloud://` 结果到相册，确认走微信云下载接口。
+6. 检查同一请求的安全重试只产生一条幂等记录、一个任务和一次额度计数。
+
+自动定时清理尚未接入。完成本轮真实验收后，应在云控制台仅针对本轮测试记录，删除五张业务集合中的测试文档，并根据 `garment_assets.fileId` 删除对应的 `garment-source-temp/` 和 `garment-results/` 测试文件；删除后再次确认文件与记录均不存在。不要在仍有其他体验数据时整表清空。清理执行结果应回写 [当前状态](current-status.md)。
