@@ -3,6 +3,10 @@ import { createHash } from "node:crypto";
 
 import type {
   ApplicationTransactionRunner,
+  GarmentAnalysisRecord,
+  GarmentAnalysisRepository,
+  GarmentAssetRecord,
+  GarmentAssetRepository,
   GenerationTaskRecord,
   GenerationTaskRepository,
   IdempotencyAction,
@@ -15,9 +19,16 @@ import type {
   TrialQuotaScope,
   TrialQuotaSnapshot,
 } from "@cloth-idea/application";
-import type { GenerationJobStatusResponse } from "@cloth-idea/domain";
+import {
+  garmentAnalysisSchema,
+  supportedImageMimeTypes,
+  type GarmentAnalysisApiResponse,
+  type GenerationJobStatusResponse,
+} from "@cloth-idea/domain";
 
 export const applicationCollectionNames = {
+  analyses: "garment_analyses",
+  assets: "garment_assets",
   generationTasks: "generation_jobs",
   idempotency: "idempotency_records",
   trialUsage: "trial_usage",
@@ -49,7 +60,7 @@ export interface WechatCloudDatabaseContext {
 
 export interface WechatCloudDatabase extends WechatCloudDatabaseContext {
   readonly command: {
-    lt(value: string): unknown;
+    lte(value: string): unknown;
   };
   runTransaction<T>(
     operation: (transaction: WechatCloudDatabaseContext) => Promise<T>,
@@ -59,6 +70,8 @@ export interface WechatCloudDatabase extends WechatCloudDatabaseContext {
 
 export interface WechatCloudApplicationPersistence {
   readonly transactions: ApplicationTransactionRunner;
+  readonly analyses: GarmentAnalysisRepository;
+  readonly assets: GarmentAssetRepository;
   readonly tasks: GenerationTaskRepository;
   readonly idempotency: IdempotencyRepository;
   readonly quotas: TrialQuotaRepository;
@@ -66,6 +79,10 @@ export interface WechatCloudApplicationPersistence {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
 function isMissingDocument(error: unknown): boolean {
@@ -99,6 +116,100 @@ function parseErrorResponse(value: unknown): {
     message: value.message,
     requestId: value.requestId,
     retryable: value.retryable,
+  };
+}
+
+function parseAnalysisResponse(value: unknown): GarmentAnalysisApiResponse | null {
+  if (
+    !isRecord(value) ||
+    typeof value.analysisId !== "string" ||
+    value.status !== "succeeded" ||
+    value.provider !== "alibaba-qwen-vl" ||
+    typeof value.model !== "string" ||
+    typeof value.durationMs !== "number" ||
+    !Number.isFinite(value.durationMs) ||
+    !isRecord(value.evidenceSummary) ||
+    !isNonNegativeInteger(value.evidenceSummary.accepted) ||
+    !isNonNegativeInteger(value.evidenceSummary.needsReview) ||
+    !isNonNegativeInteger(value.evidenceSummary.unknown) ||
+    value.evidenceSummary.accepted +
+      value.evidenceSummary.needsReview +
+      value.evidenceSummary.unknown !==
+      16
+  ) {
+    return null;
+  }
+  const analysis = garmentAnalysisSchema.safeParse(value.analysis);
+  if (!analysis.success) {
+    return null;
+  }
+  return {
+    analysisId: value.analysisId,
+    status: value.status,
+    provider: value.provider,
+    model: value.model,
+    durationMs: value.durationMs,
+    analysis: analysis.data,
+    evidenceSummary: {
+      accepted: value.evidenceSummary.accepted,
+      needsReview: value.evidenceSummary.needsReview,
+      unknown: value.evidenceSummary.unknown,
+    },
+  };
+}
+
+function parseAnalysisRecord(value: unknown): GarmentAnalysisRecord | null {
+  if (
+    !isRecord(value) ||
+    typeof value.analysisId !== "string" ||
+    typeof value.ownerId !== "string" ||
+    typeof value.sourceImageSha256 !== "string" ||
+    typeof value.expiresAt !== "string"
+  ) {
+    return null;
+  }
+  const response = parseAnalysisResponse(value.response);
+  if (!response || response.analysisId !== value.analysisId) {
+    return null;
+  }
+  return {
+    analysisId: value.analysisId,
+    ownerId: value.ownerId,
+    response,
+    sourceImageSha256: value.sourceImageSha256,
+    expiresAt: value.expiresAt,
+  };
+}
+
+const supportedMimeTypes = new Set<string>(supportedImageMimeTypes);
+
+function parseAssetRecord(value: unknown): GarmentAssetRecord | null {
+  if (
+    !isRecord(value) ||
+    typeof value.assetId !== "string" ||
+    typeof value.ownerId !== "string" ||
+    (value.kind !== "source" && value.kind !== "result") ||
+    typeof value.fileId !== "string" ||
+    !value.fileId.startsWith("cloud://") ||
+    typeof value.mimeType !== "string" ||
+    !supportedMimeTypes.has(value.mimeType) ||
+    typeof value.size !== "number" ||
+    !Number.isInteger(value.size) ||
+    value.size < 0 ||
+    typeof value.createdAt !== "string" ||
+    typeof value.expiresAt !== "string"
+  ) {
+    return null;
+  }
+  return {
+    assetId: value.assetId,
+    ownerId: value.ownerId,
+    kind: value.kind,
+    fileId: value.fileId,
+    mimeType: value.mimeType as GarmentAssetRecord["mimeType"],
+    size: value.size,
+    createdAt: value.createdAt,
+    expiresAt: value.expiresAt,
   };
 }
 
@@ -281,7 +392,7 @@ abstract class WechatCloudRepositoryBase {
       const result = await this.scope
         .current()
         .collection(collectionName)
-        .where({ expiresAt: this.scope.database.command.lt(now) })
+        .where({ expiresAt: this.scope.database.command.lte(now) })
         .limit(100)
         .get();
       const documents = Array.isArray(result.data) ? result.data : [];
@@ -297,6 +408,102 @@ abstract class WechatCloudRepositoryBase {
       removed += ids.length;
       if (ids.length < 100) {
         return removed;
+      }
+    }
+  }
+
+  protected async readExpiredBatch(collectionName: string, now: string): Promise<unknown[]> {
+    const result = await this.scope
+      .current()
+      .collection(collectionName)
+      .where({ expiresAt: this.scope.database.command.lte(now) })
+      .limit(100)
+      .get();
+    return Array.isArray(result.data) ? result.data : [];
+  }
+}
+
+class WechatGarmentAnalysisRepository
+  extends WechatCloudRepositoryBase
+  implements GarmentAnalysisRepository
+{
+  async findById(
+    ownerId: string,
+    analysisId: string,
+    now: string,
+  ): Promise<GarmentAnalysisRecord | null> {
+    const record = parseAnalysisRecord(
+      await this.read(
+        applicationCollectionNames.analyses,
+        documentId("analysis", [ownerId, analysisId]),
+      ),
+    );
+    return record && !isExpired(record.expiresAt, now) ? record : null;
+  }
+
+  async save(record: GarmentAnalysisRecord): Promise<void> {
+    await this.scope
+      .current()
+      .collection(applicationCollectionNames.analyses)
+      .doc(documentId("analysis", [record.ownerId, record.analysisId]))
+      .set({ data: record });
+  }
+
+  deleteExpired(now: string): Promise<number> {
+    return this.removeExpired(applicationCollectionNames.analyses, now);
+  }
+}
+
+class WechatGarmentAssetRepository
+  extends WechatCloudRepositoryBase
+  implements GarmentAssetRepository
+{
+  async findById(
+    ownerId: string,
+    assetId: string,
+    now: string,
+  ): Promise<GarmentAssetRecord | null> {
+    const record = parseAssetRecord(
+      await this.read(applicationCollectionNames.assets, documentId("asset", [ownerId, assetId])),
+    );
+    return record && !isExpired(record.expiresAt, now) ? record : null;
+  }
+
+  async save(record: GarmentAssetRecord): Promise<void> {
+    await this.scope
+      .current()
+      .collection(applicationCollectionNames.assets)
+      .doc(documentId("asset", [record.ownerId, record.assetId]))
+      .set({ data: record });
+  }
+
+  async delete(ownerId: string, assetId: string): Promise<boolean> {
+    const id = documentId("asset", [ownerId, assetId]);
+    if (!(await this.read(applicationCollectionNames.assets, id))) {
+      return false;
+    }
+    await this.scope.current().collection(applicationCollectionNames.assets).doc(id).remove();
+    return true;
+  }
+
+  async deleteExpired(now: string): Promise<readonly GarmentAssetRecord[]> {
+    const deleted: GarmentAssetRecord[] = [];
+    for (;;) {
+      const documents = await this.readExpiredBatch(applicationCollectionNames.assets, now);
+      if (documents.length === 0) {
+        return deleted;
+      }
+      for (const document of documents) {
+        const record = parseAssetRecord(document);
+        const id = isRecord(document) ? document._id : undefined;
+        if (!record || typeof id !== "string") {
+          throw new Error("过期资产记录格式无效，已停止清理以避免遗留云文件。");
+        }
+        await this.scope.current().collection(applicationCollectionNames.assets).doc(id).remove();
+        deleted.push(record);
+      }
+      if (documents.length < 100) {
+        return deleted;
       }
     }
   }
@@ -543,6 +750,8 @@ export function createWechatCloudApplicationPersistence(
   const transactions = new WechatCloudTransactionScope(database);
   return {
     transactions,
+    analyses: new WechatGarmentAnalysisRepository(transactions),
+    assets: new WechatGarmentAssetRepository(transactions),
     tasks: new WechatGenerationTaskRepository(transactions),
     idempotency: new WechatIdempotencyRepository(transactions),
     quotas: new WechatTrialQuotaRepository(transactions),

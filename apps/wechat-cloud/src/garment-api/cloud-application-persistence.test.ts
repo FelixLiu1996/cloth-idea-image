@@ -4,6 +4,7 @@ import {
   TrialQuotaExceededError,
   type AdmitGenerationTaskInput,
 } from "@cloth-idea/application";
+import type { GarmentAnalysisApiResponse } from "@cloth-idea/domain";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -16,17 +17,17 @@ import {
   type WechatCloudQuery,
 } from "./cloud-application-persistence";
 
-interface LessThanCondition {
-  readonly operation: "lt";
+interface LessThanOrEqualCondition {
+  readonly operation: "lte";
   readonly value: string;
 }
 
-function isLessThanCondition(value: unknown): value is LessThanCondition {
+function isLessThanOrEqualCondition(value: unknown): value is LessThanOrEqualCondition {
   return (
     typeof value === "object" &&
     value !== null &&
     "operation" in value &&
-    value.operation === "lt" &&
+    value.operation === "lte" &&
     "value" in value &&
     typeof value.value === "string"
   );
@@ -104,8 +105,8 @@ class MemoryCollection implements WechatCloudCollection {
       .filter(([, document]) =>
         Object.entries(this.condition).every(([field, expected]) => {
           const actual = document[field];
-          return isLessThanCondition(expected)
-            ? typeof actual === "string" && actual < expected.value
+          return isLessThanOrEqualCondition(expected)
+            ? typeof actual === "string" && actual <= expected.value
             : actual === expected;
         }),
       )
@@ -125,7 +126,7 @@ class MemoryDatabaseContext implements WechatCloudDatabaseContext {
 
 class MemoryWechatCloudDatabase extends MemoryDatabaseContext implements WechatCloudDatabase {
   readonly command = {
-    lt: (value: string): LessThanCondition => ({ operation: "lt", value }),
+    lte: (value: string): LessThanOrEqualCondition => ({ operation: "lte", value }),
   };
   private pending: Promise<void> = Promise.resolve();
 
@@ -161,6 +162,71 @@ class MemoryWechatCloudDatabase extends MemoryDatabaseContext implements WechatC
 
 const createdAt = "2026-08-27T10:00:00.000Z";
 const expiresAt = "2026-09-27T10:00:00.000Z";
+
+function analysisResponse(): GarmentAnalysisApiResponse {
+  return {
+    analysisId: "00000000-0000-4000-8000-000000000099",
+    status: "succeeded",
+    provider: "alibaba-qwen-vl",
+    model: "fake-analysis",
+    durationMs: 10,
+    analysis: {
+      schemaVersion: "garment-dna-v0.2",
+      visualFacts: Object.fromEntries(
+        [
+          "category",
+          "silhouette",
+          "length",
+          "shoulder",
+          "collar",
+          "closure",
+          "sleeve",
+          "cuff",
+          "pockets",
+          "frontPanels",
+          "backPanels",
+          "fabric",
+          "color",
+          "trims",
+          "craftsmanship",
+          "presentation",
+        ].map((key) => [
+          key,
+          {
+            value: null,
+            evidenceLevel: "unknown",
+            confidence: 0,
+            evidence: "测试占位",
+          },
+        ]),
+      ) as GarmentAnalysisApiResponse["analysis"]["visualFacts"],
+      userConstraints: { preserve: [], modify: [], avoid: [] },
+      conflictsOrQuestions: [],
+      designDirections: [1, 2, 3].map((index) => ({
+        id: `direction-${index}` as "direction-1" | "direction-2" | "direction-3",
+        name: `方向${index}`,
+        summary: "测试方向",
+        changes: [
+          { area: "silhouette", instruction: "调整廓形", reason: "用于测试" },
+          { area: "pockets", instruction: "调整口袋", reason: "用于测试" },
+        ],
+        preserve: [],
+        productionRisk: {
+          level: "low",
+          newPatternPieces: [],
+          newTrims: [],
+          newOperations: [],
+          fitOrStructureRisks: [],
+          reason: "测试风险",
+        },
+        promptRequirements: { positive: [], hardConstraints: [], negative: [] },
+      })),
+      recommendedDirectionId: "direction-1",
+      recommendationReason: "用于测试",
+    },
+    evidenceSummary: { accepted: 0, needsReview: 0, unknown: 16 },
+  };
+}
 
 function input(overrides: Partial<AdmitGenerationTaskInput> = {}): AdmitGenerationTaskInput {
   return {
@@ -203,6 +269,74 @@ function createService(database: WechatCloudDatabase) {
 }
 
 describe("WeChat Cloud application persistence", () => {
+  it("isolates analyses by owner and restores them across adapter instances until expiry", async () => {
+    const database = new MemoryWechatCloudDatabase();
+    const first = createService(database);
+    const response = analysisResponse();
+    await first.persistence.analyses.save({
+      analysisId: response.analysisId,
+      ownerId: "viewer-a",
+      response,
+      sourceImageSha256: "source-hash",
+      expiresAt,
+    });
+
+    const recreated = createService(database);
+    await expect(
+      recreated.persistence.analyses.findById("viewer-b", response.analysisId, createdAt),
+    ).resolves.toBeNull();
+    await expect(
+      recreated.persistence.analyses.findById("viewer-a", response.analysisId, createdAt),
+    ).resolves.toMatchObject({ sourceImageSha256: "source-hash" });
+    await expect(
+      recreated.persistence.analyses.findById(
+        "viewer-a",
+        response.analysisId,
+        "2026-10-01T00:00:00.000Z",
+      ),
+    ).resolves.toBeNull();
+    await expect(recreated.persistence.analyses.deleteExpired(expiresAt)).resolves.toBe(1);
+  });
+
+  it("isolates asset metadata and supports active and expiry-driven cleanup", async () => {
+    const database = new MemoryWechatCloudDatabase();
+    const first = createService(database);
+    await first.persistence.assets.save({
+      assetId: "source-1",
+      ownerId: "viewer-a",
+      kind: "source",
+      fileId: "cloud://test-environment/source-1.jpg",
+      mimeType: "image/jpeg",
+      size: 1024,
+      createdAt,
+      expiresAt,
+    });
+    await first.persistence.assets.save({
+      assetId: "result-1",
+      ownerId: "viewer-a",
+      kind: "result",
+      fileId: "cloud://test-environment/result-1.png",
+      mimeType: "image/png",
+      size: 2048,
+      createdAt,
+      expiresAt: "2026-12-01T00:00:00.000Z",
+    });
+
+    const recreated = createService(database);
+    await expect(
+      recreated.persistence.assets.findById("viewer-b", "source-1", createdAt),
+    ).resolves.toBeNull();
+    await expect(
+      recreated.persistence.assets.findById("viewer-a", "source-1", createdAt),
+    ).resolves.toMatchObject({ fileId: "cloud://test-environment/source-1.jpg" });
+    await expect(recreated.persistence.assets.deleteExpired(expiresAt)).resolves.toEqual([
+      expect.objectContaining({ assetId: "source-1", ownerId: "viewer-a" }),
+    ]);
+    await expect(recreated.persistence.assets.delete("viewer-b", "result-1")).resolves.toBe(false);
+    await expect(recreated.persistence.assets.delete("viewer-a", "result-1")).resolves.toBe(true);
+    expect(database.count(applicationCollectionNames.assets)).toBe(0);
+  });
+
   it("keeps one task and one quota charge across adapter recreation and concurrent retries", async () => {
     const database = new MemoryWechatCloudDatabase();
     const first = createService(database);

@@ -73,6 +73,7 @@ interface GarmentGateway {
 第一版计划使用以下云数据库集合：
 
 - `garment_analyses`：结构化分析、原图哈希、所属 OpenID、有效期。
+- `garment_assets`：原图与结果图的受控云文件引用、类型、大小和有效期。
 - `generation_jobs`：任务状态、方向、父子关系、累计修改、Provider、模型、错误和结果引用。
 - `idempotency_records`：OpenID、业务动作、幂等键、请求指纹和绑定任务。
 - `trial_usage`：用户和全局维度的分析/生图计数、日期、并发租约与启动间隔。
@@ -104,7 +105,7 @@ garment-results/{openid-hash}/{jobId}/result.{ext}
 1. 已完成：新增 `GarmentGateway`，把现有 HTTP 实现收敛为可替换网关，保持 H5 行为不变。
 2. 部分完成：建立 `WechatCloudGarmentGateway`、云开发配置校验和可替换入口；能力查询已接入 `garment-api`，模型业务方法仍返回明确的“尚未部署”错误。
 3. 部分完成：新增 `@cloth-idea/application`，抽出持久幂等、用户/全局额度预占和排队任务创建用例；Fastify 首次生成与继续修改已切换，云函数业务动作尚未接入。
-4. 部分完成：分析、任务、幂等、额度和资产仓储接口及内存 Fake 已完成；微信云数据库的任务、幂等和额度事务适配器也已完成 Fake 契约测试，分析与云存储资产适配器尚未实现。
+4. 部分完成：分析、任务、幂等、额度和资产仓储接口及内存 Fake 已完成；微信云数据库五类仓储与云文件上传、下载、删除适配器也已完成 Fake 契约测试，真实集合和业务动作尚未接入。
 5. 保持 `npm run build`、`npm run build:weapp` 和现有自动化测试通过。
 
 ### 阶段 B：需要 AppID 和云环境 ID

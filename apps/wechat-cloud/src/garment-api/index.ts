@@ -10,6 +10,7 @@ import {
   createWechatCloudApplicationPersistence,
   type WechatCloudDatabase,
 } from "./cloud-application-persistence";
+import { WechatCloudGarmentAssetStorage } from "./cloud-asset-storage";
 
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV as unknown as string });
 
@@ -17,6 +18,21 @@ const database = cloud.database();
 export const applicationPersistence = createWechatCloudApplicationPersistence(
   database as unknown as WechatCloudDatabase,
 );
+export const garmentAssetStorage = new WechatCloudGarmentAssetStorage({
+  uploadFile: ({ cloudPath, fileContent }) =>
+    cloud.uploadFile({ cloudPath, fileContent: Buffer.from(fileContent) }),
+  downloadFile: async ({ fileID }) => {
+    const result = await cloud.downloadFile({ fileID });
+    return { fileContent: result.fileContent, statusCode: result.statusCode };
+  },
+  deleteFile: async ({ fileList }) => {
+    const result = await cloud.deleteFile({ fileList: [...fileList] });
+    if (!result) {
+      throw new Error("cloud file deletion returned no result");
+    }
+    return result;
+  },
+});
 const trialMembers = database.collection("trial_members");
 const infrastructureProbes = database.collection("infrastructure_probes");
 const supportedMimeTypes = new Set<string>(supportedImageMimeTypes);
@@ -100,16 +116,7 @@ const handler = createGarmentCloudHandler({
       await infrastructureProbes.doc(probeId).remove();
     },
   },
-  async deleteCloudFile(cloudFileId) {
-    const result = await cloud.deleteFile({ fileList: [cloudFileId] });
-    if (!result) {
-      throw new Error("cloud file deletion returned no result");
-    }
-    const deletion = result.fileList[0];
-    if (!deletion || deletion.status !== 0) {
-      throw new Error("cloud file deletion failed");
-    }
-  },
+  deleteCloudFile: (cloudFileId) => garmentAssetStorage.delete(cloudFileId),
   now: () => new Date().toISOString(),
   createRequestId: createDefaultRequestId,
 });
