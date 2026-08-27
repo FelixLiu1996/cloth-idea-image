@@ -17,6 +17,7 @@
     "baseUrl": ".",
     "paths": {
       "@cloth-idea/domain": ["packages/domain/src/index.ts"],
+      "@cloth-idea/application": ["packages/application/src/index.ts"],
       "@cloth-idea/model-providers": ["packages/model-providers/src/index.ts"]
     }
   }
