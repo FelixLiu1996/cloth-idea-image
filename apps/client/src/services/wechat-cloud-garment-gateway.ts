@@ -1,5 +1,4 @@
 import {
-  garmentAnalysisSchema,
   type GarmentAnalysisApiResponse,
   type GarmentAnalysisBrief,
   type GenerationApiResponse,
@@ -37,6 +36,152 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+const garmentFactKeys = [
+  "category",
+  "silhouette",
+  "length",
+  "shoulder",
+  "collar",
+  "closure",
+  "sleeve",
+  "cuff",
+  "pockets",
+  "frontPanels",
+  "backPanels",
+  "fabric",
+  "color",
+  "trims",
+  "craftsmanship",
+  "presentation",
+] as const;
+
+const garmentChangeAreas = new Set([
+  "silhouette",
+  "proportion",
+  "shoulder",
+  "collar",
+  "closure",
+  "sleeve",
+  "cuff",
+  "pockets",
+  "panels",
+  "fabric",
+  "color",
+  "trims",
+  "craftsmanship",
+  "presentation",
+]);
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isBoundedString(value: unknown, minimum: number, maximum: number): value is string {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const length = value.trim().length;
+  return length >= minimum && length <= maximum;
+}
+
+function isStringList(value: unknown, maximum: number): value is readonly string[] {
+  return (
+    Array.isArray(value) && value.length <= maximum && value.every((item) => isNonEmptyString(item))
+  );
+}
+
+function isGarmentFact(value: unknown): boolean {
+  if (
+    !isRecord(value) ||
+    (value.value !== null &&
+      typeof value.value !== "string" &&
+      !(Array.isArray(value.value) && value.value.every((item) => typeof item === "string"))) ||
+    (value.evidenceLevel !== "visible" &&
+      value.evidenceLevel !== "inferred" &&
+      value.evidenceLevel !== "unknown") ||
+    typeof value.confidence !== "number" ||
+    value.confidence < 0 ||
+    value.confidence > 1 ||
+    !isBoundedString(value.evidence, 1, 1_000)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function isProductionRisk(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    (value.level === "low" || value.level === "medium" || value.level === "high") &&
+    isStringList(value.newPatternPieces, 12) &&
+    isStringList(value.newTrims, 12) &&
+    isStringList(value.newOperations, 12) &&
+    isStringList(value.fitOrStructureRisks, 12) &&
+    isBoundedString(value.reason, 2, 1_000)
+  );
+}
+
+function isDesignDirection(value: unknown): boolean {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== "string" ||
+    !/^direction-[1-3]$/.test(value.id) ||
+    !isBoundedString(value.name, 2, 80) ||
+    !isBoundedString(value.summary, 2, 500) ||
+    !Array.isArray(value.changes) ||
+    value.changes.length < 2 ||
+    value.changes.length > 16 ||
+    !value.changes.every(
+      (change) =>
+        isRecord(change) &&
+        typeof change.area === "string" &&
+        garmentChangeAreas.has(change.area) &&
+        isBoundedString(change.instruction, 2, 500) &&
+        isBoundedString(change.reason, 2, 500),
+    ) ||
+    !isStringList(value.preserve, 16) ||
+    !isProductionRisk(value.productionRisk) ||
+    !isRecord(value.promptRequirements) ||
+    !isStringList(value.promptRequirements.positive, 20) ||
+    !isStringList(value.promptRequirements.hardConstraints, 20) ||
+    !isStringList(value.promptRequirements.negative, 20)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function isGarmentAnalysis(value: unknown): value is GarmentAnalysisApiResponse["analysis"] {
+  if (
+    !isRecord(value) ||
+    value.schemaVersion !== "garment-dna-v0.2" ||
+    !isRecord(value.visualFacts) ||
+    !garmentFactKeys.every((key) =>
+      isGarmentFact((value.visualFacts as Record<string, unknown>)[key]),
+    ) ||
+    !isRecord(value.userConstraints) ||
+    !isStringList(value.userConstraints.preserve, 16) ||
+    !isStringList(value.userConstraints.modify, 16) ||
+    !isStringList(value.userConstraints.avoid, 16) ||
+    !isStringList(value.conflictsOrQuestions, 12) ||
+    !Array.isArray(value.designDirections) ||
+    value.designDirections.length !== 3 ||
+    !value.designDirections.every((direction) => isDesignDirection(direction)) ||
+    typeof value.recommendedDirectionId !== "string" ||
+    !/^direction-[1-3]$/.test(value.recommendedDirectionId) ||
+    !isBoundedString(value.recommendationReason, 2, 1_000)
+  ) {
+    return false;
+  }
+  const directionIds = value.designDirections.map((direction) =>
+    isRecord(direction) ? direction.id : null,
+  );
+  return (
+    new Set(directionIds).size === directionIds.length &&
+    directionIds.includes(value.recommendedDirectionId)
+  );
+}
+
 function wait(delayMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
@@ -68,12 +213,11 @@ function parseAnalysis(value: unknown): GarmentAnalysisApiResponse {
   ) {
     throw new GenerationApiError("云端分析结果无法识别。", "BAD_CLOUD_RESPONSE", true);
   }
-  const analysis = garmentAnalysisSchema.safeParse(value.analysis);
   const accepted = value.evidenceSummary.accepted;
   const needsReview = value.evidenceSummary.needsReview;
   const unknown = value.evidenceSummary.unknown;
   if (
-    !analysis.success ||
+    !isGarmentAnalysis(value.analysis) ||
     !Number.isInteger(accepted) ||
     !Number.isInteger(needsReview) ||
     !Number.isInteger(unknown) ||
@@ -87,7 +231,7 @@ function parseAnalysis(value: unknown): GarmentAnalysisApiResponse {
     provider: value.provider,
     model: value.model,
     durationMs: value.durationMs,
-    analysis: analysis.data,
+    analysis: value.analysis,
     evidenceSummary: {
       accepted: accepted as number,
       needsReview: needsReview as number,

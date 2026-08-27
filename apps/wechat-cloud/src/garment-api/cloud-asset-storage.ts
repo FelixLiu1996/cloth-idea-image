@@ -51,7 +51,17 @@ function assertSafePathSegment(name: string, value: string): void {
   }
 }
 
-function assertSuccessfulStatus(statusCode: number, operation: string): void {
+function assertSuccessfulStatus(
+  statusCode: number,
+  operation: string,
+  allowUnobservedStatus = false,
+): void {
+  // wx-server-sdk may resolve uploadFile with a valid cloud:// file ID while
+  // leaving statusCode at its internal "not observed" sentinel (-1).
+  // A resolved request still has to pass the response-shape checks below.
+  if (allowUnobservedStatus && statusCode === -1) {
+    return;
+  }
   if (statusCode < 200 || statusCode >= 300) {
     throw new Error(`${operation}失败。`);
   }
@@ -76,7 +86,7 @@ export class WechatCloudGarmentAssetStorage {
       cloudPath,
       fileContent: input.bytes,
     });
-    assertSuccessfulStatus(result.statusCode, "云文件上传");
+    assertSuccessfulStatus(result.statusCode, "云文件上传", true);
     if (!result.fileID.startsWith("cloud://")) {
       throw new Error("云文件上传返回了无效的文件 ID。");
     }

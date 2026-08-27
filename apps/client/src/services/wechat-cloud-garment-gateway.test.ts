@@ -199,6 +199,44 @@ describe("WeChat cloud garment gateway", () => {
     );
   });
 
+  it("rejects an inconsistent analysis without relying on a client-side Zod runtime", async () => {
+    const uploadFile = vi.fn().mockResolvedValue({ fileID: "cloud://env/source.png" });
+    const callFunction = vi.fn().mockImplementation(({ data }) =>
+      Promise.resolve({
+        result:
+          data.action === "get-capabilities"
+            ? { ok: true, data: capabilities }
+            : {
+                ok: true,
+                data: {
+                  analysisId: "00000000-0000-4000-8000-000000000001",
+                  status: "succeeded",
+                  provider: "testing-fake",
+                  model: "fake-garment-analysis-v1",
+                  durationMs: 0,
+                  analysis: {
+                    ...analysis,
+                    designDirections: [
+                      analysis.designDirections[0],
+                      analysis.designDirections[0],
+                      analysis.designDirections[2],
+                    ],
+                  },
+                  evidenceSummary: { accepted: 0, needsReview: 0, unknown: 16 },
+                },
+              },
+      }),
+    );
+    const gateway = new WechatCloudGarmentGateway({
+      callFunction,
+      uploadFile,
+    } as WechatCloudGarmentClient);
+
+    await expect(gateway.analyzeGarment(input())).rejects.toMatchObject({
+      code: "BAD_CLOUD_RESPONSE",
+    });
+  });
+
   it("polls a queued task and clears its local recovery marker after success", async () => {
     const pending = memoryPending();
     const uploadFile = vi.fn().mockResolvedValue({ fileID: "cloud://env/source.png" });

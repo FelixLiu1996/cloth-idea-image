@@ -64,6 +64,59 @@ describe("WechatCloudGarmentAssetStorage", () => {
     await expect(storage.read(result.fileId)).resolves.toEqual(new Uint8Array([4, 5]));
   });
 
+  it("accepts the wx-server-sdk unresolved status sentinel when upload returns a valid file ID", async () => {
+    const { client } = createClient();
+    vi.mocked(client.uploadFile).mockResolvedValueOnce({
+      fileID: "cloud://test-environment/garment-results/viewer-a/result-2/result.png",
+      statusCode: -1,
+    });
+    const storage = new WechatCloudGarmentAssetStorage(client);
+
+    await expect(
+      storage.save({
+        ownerId: "viewer-a",
+        assetId: "result-2",
+        kind: "result",
+        mimeType: "image/png",
+        bytes: new Uint8Array([4, 5]),
+      }),
+    ).resolves.toMatchObject({
+      fileId: "cloud://test-environment/garment-results/viewer-a/result-2/result.png",
+    });
+  });
+
+  it("still rejects an invalid file ID when upload status is unavailable", async () => {
+    const { client } = createClient();
+    vi.mocked(client.uploadFile).mockResolvedValueOnce({
+      fileID: "invalid-file-id",
+      statusCode: -1,
+    });
+    const storage = new WechatCloudGarmentAssetStorage(client);
+
+    await expect(
+      storage.save({
+        ownerId: "viewer-a",
+        assetId: "result-3",
+        kind: "result",
+        mimeType: "image/png",
+        bytes: new Uint8Array([4, 5]),
+      }),
+    ).rejects.toThrow("无效的文件 ID");
+  });
+
+  it("does not accept the upload-only status sentinel for downloads", async () => {
+    const { client } = createClient();
+    vi.mocked(client.downloadFile).mockResolvedValueOnce({
+      fileContent: new Uint8Array([1]),
+      statusCode: -1,
+    });
+    const storage = new WechatCloudGarmentAssetStorage(client);
+
+    await expect(storage.read("cloud://test-environment/source.jpg")).rejects.toThrow(
+      "云文件下载失败",
+    );
+  });
+
   it("actively deletes a stored cloud file", async () => {
     const { client, files } = createClient();
     const storage = new WechatCloudGarmentAssetStorage(client);

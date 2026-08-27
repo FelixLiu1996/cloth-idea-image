@@ -14,7 +14,7 @@
   → 删除云文件和数据库记录
 ```
 
-对应探针代码、自动化测试和独立云环境验证均已完成。这不是完整服装改款云端链路。仓库后续已经增加分析、生成、任务轮询、持久额度和测试结果转存的 Fake Provider 代码，但尚未在真实环境部署或验收；真实 Qwen/生图模型仍未迁移。
+对应探针代码、自动化测试和独立云环境验证均已完成。这不是完整服装改款云端链路。仓库后续已经增加分析、生成、任务轮询、持久额度和测试结果转存的 Fake Provider，并已在真实环境完成分析、首次生成和再次生成切片；真实 Qwen/生图模型仍未迁移。
 
 ## 2. 固定环境
 
@@ -129,11 +129,11 @@ garment-source-temp/{viewerFingerprint}/incoming/{idempotencyKey}.{ext}
 
 首次云端调用曾因构建产物残留 `require("@cloth-idea/domain")` 而在函数入口前失败；打包规则和构建期检查已经修复。函数重建后仍能读取原探针记录，证明记录保存在云数据库而不是函数实例内。
 
-## 9. 下一轮 Fake Provider 业务验收（尚未执行）
+## 9. Fake Provider 业务验收
 
-当前仓库已经实现不调用模型的 Fake Provider 业务路径，但截至2026-08-27尚未部署到真实云环境。该路径只验证业务协议、持久任务、幂等、额度、结果转存和重进恢复；分析结果会明确显示“未调用视觉模型”，生成结果只是原图副本，不代表真实设计效果。
+当前仓库已经实现不调用模型的 Fake Provider 业务路径，并于2026-08-27部署到真实云环境。该路径只验证业务协议、持久任务、幂等、额度和结果转存；分析结果会明确显示“未调用视觉模型”，生成结果只是原图副本，不代表真实设计效果。
 
-在真实环境验收前，先创建以下五张集合并全部设置为 `ADMINONLY`：
+以下五张集合已经创建并全部设置为 `ADMINONLY`：
 
 - `garment_analyses`
 - `garment_assets`
@@ -160,7 +160,7 @@ ASSET_RETENTION_HOURS=72
 TARO_APP_GARMENT_GATEWAY_MODE=wechat-cloud npm run build:weapp
 ```
 
-真机依次验证：
+完整真机验收仍需依次验证：
 
 1. 上传原图并获得三个明确标记为 Fake 的设计方向。
 2. 选择一个方向并生成；首次提交应创建持久任务，客户端随后查询到 `succeeded`。
@@ -169,4 +169,16 @@ TARO_APP_GARMENT_GATEWAY_MODE=wechat-cloud npm run build:weapp
 5. 保存 `cloud://` 结果到相册，确认走微信云下载接口。
 6. 检查同一请求的安全重试只产生一条幂等记录、一个任务和一次额度计数。
 
-自动定时清理尚未接入。完成本轮真实验收后，应在云控制台仅针对本轮测试记录，删除五张业务集合中的测试文档，并根据 `garment_assets.fileId` 删除对应的 `garment-source-temp/` 和 `garment-results/` 测试文件；删除后再次确认文件与记录均不存在。不要在仍有其他体验数据时整表清空。清理执行结果应回写 [当前状态](current-status.md)。
+### 9.1 已完成的真实环境记录
+
+2026-08-27 已通过微信开发者工具中的真实微信身份完成以下无模型费用验证：
+
+- 显式以 `wechat-cloud` 网关构建小程序，Fake 分析返回三个方向并在页面正确展示。
+- 选择推荐方向后，首次生成与同方向再次生成均返回 `succeeded`；两条任务分别标记为 `initial` 和 `regenerate`，第二条任务正确保存第一条任务的 `parentJobId`。
+- `garment_analyses`、`garment_assets`、`generation_jobs`、`idempotency_records` 和 `trial_usage` 均产生了可查询记录；结果文件真实转存到 `garment-results/`，Provider/模型分别为 `testing-fake` / `fake-image-copy-v1`。
+- 真实运行发现并修复微信包携带 Zod 导致分析结果解析异常，以及 `wx-server-sdk@4.0.2` 上传成功但返回 `statusCode=-1` 被误判失败的问题；修复后分析与两次生成均成功。
+- 本轮测试的7个云文件和21条业务记录已按精确路径与文档 ID 永久删除；复核五张业务集合均为0条，`trial_members` 仍为1条，未改变体验成员配置。
+
+本轮尚未通过真机界面完成继续修改、任务处理中退出后恢复、保存到手机相册和同一幂等键真实重放；这些能力当前有自动化契约测试，但不能据此宣称完整真机闭环已完成。
+
+自动定时清理尚未接入。后续每轮验收仍应只删除本轮精确测试记录，并根据 `garment_assets.fileId` 删除对应的 `garment-source-temp/` 和 `garment-results/` 文件；不要在仍有其他体验数据时整表清空。清理结果应回写 [当前状态](current-status.md)。

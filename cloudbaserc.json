@@ -8,7 +8,15 @@
       "runtime": "Nodejs20.19",
       "timeout": 30,
       "memorySize": 256,
-      "installDependency": true
+      "installDependency": true,
+      "envVariables": {
+        "WECHAT_CLOUD_BUSINESS_PROVIDER": "fake",
+        "TRIAL_DAILY_ANALYSIS_LIMIT": "5",
+        "TRIAL_DAILY_GENERATION_LIMIT": "10",
+        "TRIAL_GLOBAL_DAILY_ANALYSIS_LIMIT": "100",
+        "TRIAL_GLOBAL_DAILY_GENERATION_LIMIT": "200",
+        "ASSET_RETENTION_HOURS": "72"
+      }
     }
   ]
 }
