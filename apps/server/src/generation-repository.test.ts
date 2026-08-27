@@ -66,15 +66,20 @@ describe("GenerationResultRepository", () => {
       await gate;
       return record;
     });
+    const onAccepted = vi.fn();
     const repository = new GenerationResultRepository();
 
-    const first = repository.enqueueOnce(jobInput(operation));
+    const first = repository.enqueueOnce(jobInput(operation, { onAccepted }));
     const second = repository.enqueueOnce(
-      jobInput(operation, { jobId: "00000000-0000-0000-0000-000000000002" }),
+      jobInput(operation, {
+        jobId: "00000000-0000-0000-0000-000000000002",
+        onAccepted,
+      }),
     );
 
     expect(first).toMatchObject({ reused: false, job: { status: "queued", jobId: result.jobId } });
     expect(second).toMatchObject({ reused: true, job: { jobId: result.jobId } });
+    expect(onAccepted).toHaveBeenCalledTimes(1);
     await vi.waitFor(() => expect(operation).toHaveBeenCalledTimes(1));
     expect(repository.getJob(result.jobId)?.status).toBe("generating");
 
@@ -113,6 +118,21 @@ describe("GenerationResultRepository", () => {
         }),
       ),
     ).toThrow("同一个幂等键不能用于不同的生成请求");
+  });
+
+  it("does not create a job when the admission policy rejects it", () => {
+    const repository = new GenerationResultRepository();
+
+    expect(() =>
+      repository.enqueueOnce(
+        jobInput(async () => record, {
+          onAccepted: () => {
+            throw new Error("daily quota reached");
+          },
+        }),
+      ),
+    ).toThrow("daily quota reached");
+    expect(repository.getJob(result.jobId)).toBeNull();
   });
 
   it("stores successful generation records for later refinement", () => {

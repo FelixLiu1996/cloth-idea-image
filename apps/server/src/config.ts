@@ -17,6 +17,13 @@ export interface ServerConfig {
   readonly clientOrigin: string;
   readonly assetDirectory: string;
   readonly maxUploadBytes: number;
+  readonly trialAccessCode: string | null;
+  readonly trialDailyAnalysisLimit: number;
+  readonly trialDailyGenerationLimit: number;
+  readonly trialMaxConcurrentModelRequests: number;
+  readonly trialGenerationMinIntervalMs: number;
+  readonly assetRetentionMs: number;
+  readonly assetCleanupIntervalMs: number;
 }
 
 function readPort(value: string | undefined): number {
@@ -27,8 +34,29 @@ function readPort(value: string | undefined): number {
   return parsed;
 }
 
+function readNonNegativeInteger(name: string, value: string | undefined, fallback: number): number {
+  const parsed = Number(value ?? fallback);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`${name} 必须是大于或等于 0 的整数。`);
+  }
+  return parsed;
+}
+
+function readPositiveInteger(name: string, value: string | undefined, fallback: number): number {
+  const parsed = readNonNegativeInteger(name, value, fallback);
+  if (parsed < 1) {
+    throw new Error(`${name} 必须是大于或等于 1 的整数。`);
+  }
+  return parsed;
+}
+
 export function loadServerConfig(environment: NodeJS.ProcessEnv = process.env): ServerConfig {
   const port = readPort(environment.SERVER_PORT);
+  const assetRetentionHours = readNonNegativeInteger(
+    "ASSET_RETENTION_HOURS",
+    environment.ASSET_RETENTION_HOURS,
+    0,
+  );
 
   return {
     host: environment.SERVER_HOST ?? "127.0.0.1",
@@ -37,6 +65,29 @@ export function loadServerConfig(environment: NodeJS.ProcessEnv = process.env): 
     clientOrigin: environment.CLIENT_ORIGIN ?? "http://127.0.0.1:10086",
     assetDirectory: resolve(environment.ASSET_DIRECTORY ?? "var/assets"),
     maxUploadBytes: 10 * 1024 * 1024,
+    trialAccessCode: environment.TRIAL_ACCESS_CODE?.trim() || null,
+    trialDailyAnalysisLimit: readNonNegativeInteger(
+      "TRIAL_DAILY_ANALYSIS_LIMIT",
+      environment.TRIAL_DAILY_ANALYSIS_LIMIT,
+      20,
+    ),
+    trialDailyGenerationLimit: readNonNegativeInteger(
+      "TRIAL_DAILY_GENERATION_LIMIT",
+      environment.TRIAL_DAILY_GENERATION_LIMIT,
+      30,
+    ),
+    trialMaxConcurrentModelRequests: readPositiveInteger(
+      "TRIAL_MAX_CONCURRENT_MODEL_REQUESTS",
+      environment.TRIAL_MAX_CONCURRENT_MODEL_REQUESTS,
+      1,
+    ),
+    trialGenerationMinIntervalMs: readNonNegativeInteger(
+      "TRIAL_GENERATION_MIN_INTERVAL_MS",
+      environment.TRIAL_GENERATION_MIN_INTERVAL_MS,
+      31_000,
+    ),
+    assetRetentionMs: assetRetentionHours * 60 * 60 * 1_000,
+    assetCleanupIntervalMs: 60 * 60 * 1_000,
   };
 }
 

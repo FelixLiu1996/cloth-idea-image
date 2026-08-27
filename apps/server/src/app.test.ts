@@ -139,6 +139,7 @@ async function createMultipartRequest(
     directionId?: string;
     parentJobId?: string;
     idempotencyKey?: string;
+    trialAccessCode?: string;
   } = {},
 ) {
   const form = new FormData();
@@ -161,12 +162,16 @@ async function createMultipartRequest(
   }
 
   const request = new Request("http://localhost", { method: "POST", body: form });
+  const headers: Record<string, string> = {
+    "content-type": request.headers.get("content-type") ?? "multipart/form-data",
+    "idempotency-key": options.idempotencyKey ?? "same-request",
+  };
+  if (options.trialAccessCode) {
+    headers["x-trial-access-code"] = options.trialAccessCode;
+  }
   return {
     payload: Buffer.from(await request.arrayBuffer()),
-    headers: {
-      "content-type": request.headers.get("content-type") ?? "multipart/form-data",
-      "idempotency-key": options.idempotencyKey ?? "same-request",
-    },
+    headers,
   };
 }
 
@@ -189,7 +194,7 @@ async function createRefinementRequest(options: {
   };
 }
 
-async function createTestContext() {
+async function createTestContext(configOverrides: Partial<ServerConfig> = {}) {
   const assetDirectory = await mkdtemp(join(tmpdir(), "cloth-idea-server-"));
   const config: ServerConfig = {
     host: "127.0.0.1",
@@ -198,6 +203,14 @@ async function createTestContext() {
     clientOrigin: "*",
     assetDirectory,
     maxUploadBytes: 10 * 1024 * 1024,
+    trialAccessCode: null,
+    trialDailyAnalysisLimit: 0,
+    trialDailyGenerationLimit: 0,
+    trialMaxConcurrentModelRequests: 2,
+    trialGenerationMinIntervalMs: 0,
+    assetRetentionMs: 0,
+    assetCleanupIntervalMs: 60 * 60 * 1_000,
+    ...configOverrides,
   };
   const provider = new FakeProvider();
   const analyzer = new FakeAnalyzer();
@@ -238,6 +251,7 @@ describe("generation API", () => {
       expect(capabilitiesResponse.json()).toMatchObject({
         generationJobsAsync: true,
         resultIterationEnabled: true,
+        trialAccessRequired: false,
       });
     } finally {
       await context.app.close();
@@ -320,6 +334,68 @@ describe("generation API", () => {
         code: "IMAGE_REQUIRED",
         retryable: false,
       });
+    } finally {
+      await context.app.close();
+      await rm(context.assetDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("protects paid routes with a trial code and a daily generation quota", async () => {
+    const context = await createTestContext({
+      trialAccessCode: "invite-only",
+      trialDailyGenerationLimit: 1,
+    });
+    try {
+      const unauthorized = await context.app.inject({
+        method: "POST",
+        url: "/api/v1/generations",
+        ...(await createMultipartRequest({ idempotencyKey: "protected-generation" })),
+      });
+      expect(unauthorized.statusCode).toBe(401);
+      expect(unauthorized.json()).toMatchObject({
+        code: "AUTH_TRIAL_ACCESS_DENIED",
+        retryable: false,
+      });
+      expect(context.provider.generateVariation).not.toHaveBeenCalled();
+
+      const authorizedRequest = await createMultipartRequest({
+        idempotencyKey: "protected-generation",
+        trialAccessCode: "invite-only",
+      });
+      const authorized = await context.app.inject({
+        method: "POST",
+        url: "/api/v1/generations",
+        ...authorizedRequest,
+      });
+      expect(authorized.statusCode).toBe(202);
+      const submitted = authorized.json<GenerationJobStatusResponse>();
+      await waitForGeneration(context.app, submitted.jobId);
+
+      const idempotentReuse = await context.app.inject({
+        method: "POST",
+        url: "/api/v1/generations",
+        ...(await createMultipartRequest({
+          idempotencyKey: "protected-generation",
+          trialAccessCode: "invite-only",
+        })),
+      });
+      expect(idempotentReuse.statusCode).toBe(200);
+      expect(idempotentReuse.json<GenerationJobStatusResponse>().jobId).toBe(submitted.jobId);
+
+      const overQuota = await context.app.inject({
+        method: "POST",
+        url: "/api/v1/generations",
+        ...(await createMultipartRequest({
+          idempotencyKey: "over-quota-generation",
+          trialAccessCode: "invite-only",
+        })),
+      });
+      expect(overQuota.statusCode).toBe(429);
+      expect(overQuota.json()).toMatchObject({
+        code: "RATE_LIMIT_DAILY_GENERATION_REACHED",
+        retryable: false,
+      });
+      expect(context.provider.generateVariation).toHaveBeenCalledTimes(1);
     } finally {
       await context.app.close();
       await rm(context.assetDirectory, { recursive: true, force: true });

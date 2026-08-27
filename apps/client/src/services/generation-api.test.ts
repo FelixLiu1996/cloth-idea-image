@@ -6,7 +6,11 @@ import type {
 import Taro from "@tarojs/taro";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createGeneration, type CreateGenerationRequest } from "./generation-api";
+import {
+  createGeneration,
+  getTrialCapabilities,
+  type CreateGenerationRequest,
+} from "./generation-api";
 
 vi.mock("@tarojs/taro", () => ({
   default: {
@@ -109,6 +113,42 @@ describe("generation API service", () => {
 
     await expect(resultPromise).resolves.toEqual(succeeded);
     expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("sends the user-entered trial code only to the application API", async () => {
+    uploadFile.mockResolvedValue({ statusCode: 200, data: JSON.stringify(succeeded) } as never);
+
+    await expect(createGeneration({ ...input, accessCode: " invite-only " })).resolves.toEqual(
+      succeeded,
+    );
+
+    expect(uploadFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        header: expect.objectContaining({
+          "X-Trial-Access-Code": "invite-only",
+        }),
+      }),
+    );
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("reads controlled trial capabilities", async () => {
+    request.mockResolvedValue({
+      statusCode: 200,
+      data: {
+        trialAccessRequired: true,
+        trialDailyAnalysisLimit: 10,
+        trialDailyGenerationLimit: 15,
+        assetRetentionHours: 72,
+      },
+    } as never);
+
+    await expect(getTrialCapabilities()).resolves.toEqual({
+      trialAccessRequired: true,
+      trialDailyAnalysisLimit: 10,
+      trialDailyGenerationLimit: 15,
+      assetRetentionHours: 72,
+    });
   });
 
   it("surfaces an asynchronous provider failure", async () => {

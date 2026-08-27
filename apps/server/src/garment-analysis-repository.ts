@@ -65,9 +65,11 @@ export class GarmentAnalysisRepository {
 
   async executeOnce(
     key: string | undefined,
+    onAccepted: () => void,
     operation: () => Promise<GarmentAnalysisApiResponse>,
   ): Promise<{ result: GarmentAnalysisApiResponse; reused: boolean }> {
     if (!key) {
+      onAccepted();
       return { result: await operation(), reused: false };
     }
 
@@ -76,6 +78,7 @@ export class GarmentAnalysisRepository {
       return { result: await existingExecution, reused: true };
     }
 
+    onAccepted();
     const execution = operation();
     this.executionsByIdempotencyKey.set(key, execution);
     try {

@@ -4,18 +4,20 @@ import type {
   GenerationApiResponse,
   GenerationMode,
 } from "@cloth-idea/domain";
-import { Button, Image, Text, Textarea, View } from "@tarojs/components";
+import { Button, Image, Input, Text, Textarea, View } from "@tarojs/components";
 import Taro from "@tarojs/taro";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   saveGeneratedImage,
   selectGarmentImage,
   type SelectedImage,
 } from "../../platform/image-platform";
+import { readTrialAccessCode, saveTrialAccessCode } from "../../platform/trial-access-platform";
 import {
   analyzeGarment,
   createGeneration,
+  getTrialCapabilities,
   refineGeneration,
   type CreateGenerationRequest,
 } from "../../services/generation-api";
@@ -91,6 +93,22 @@ export default function Index() {
   const [results, setResults] = useState<GenerationApiResponse[]>([]);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [revisionInstruction, setRevisionInstruction] = useState("");
+  const [trialAccessRequired, setTrialAccessRequired] = useState(false);
+  const [trialAccessCode, setTrialAccessCode] = useState(readTrialAccessCode);
+
+  useEffect(() => {
+    let active = true;
+    void getTrialCapabilities()
+      .then((capabilities) => {
+        if (active) {
+          setTrialAccessRequired(capabilities.trialAccessRequired);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const busy = analyzing || generating || refining;
   const canRequest = useMemo(
@@ -98,8 +116,9 @@ export default function Index() {
       image !== null &&
       changeRequest.trim().length >= 2 &&
       styleDirection.trim().length >= 2 &&
+      (!trialAccessRequired || trialAccessCode.trim().length > 0) &&
       !busy,
-    [busy, changeRequest, image, styleDirection],
+    [busy, changeRequest, image, styleDirection, trialAccessCode, trialAccessRequired],
   );
   const canGenerateAnalyzed = canRequest && analysisResult !== null && selectedDirectionId !== null;
   const activeResult = useMemo(
@@ -143,6 +162,7 @@ export default function Index() {
       changeRequest,
       styleDirection,
       intensity,
+      ...(trialAccessCode.trim() ? { accessCode: trialAccessCode.trim() } : {}),
     };
   }
 
@@ -241,6 +261,7 @@ export default function Index() {
         parentJobId: activeResult.jobId,
         imagePath: image.path,
         instruction,
+        ...(trialAccessCode.trim() ? { accessCode: trialAccessCode.trim() } : {}),
       });
       setResults((current) =>
         current.some((item) => item.jobId === nextResult.jobId)
@@ -284,6 +305,23 @@ export default function Index() {
           先识别可信的原款结构，再选择设计方向，最后生成一张效果图。
         </Text>
       </View>
+
+      {trialAccessRequired && (
+        <View className="access-card">
+          <Text className="access-title">小范围试用</Text>
+          <Text className="access-copy">请输入邀请方提供的访问码，模型密钥不会发送到设备端。</Text>
+          <Input
+            className="access-input"
+            disabled={busy}
+            password
+            value={trialAccessCode}
+            maxlength={128}
+            placeholder="试用访问码"
+            onInput={(event) => setTrialAccessCode(event.detail.value)}
+            onBlur={() => saveTrialAccessCode(trialAccessCode)}
+          />
+        </View>
+      )}
 
       <View className="section">
         <View className="section-heading">

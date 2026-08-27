@@ -71,6 +71,44 @@ $line: #dedbd2;
   line-height: 1.6;
 }
 
+.access-card {
+  margin-bottom: 28px;
+  padding: 26px 30px;
+  border: 1px solid rgba(216, 109, 53, 0.24);
+  border-radius: 24px;
+  background: #fff7f0;
+}
+
+.access-title,
+.access-copy {
+  display: block;
+}
+
+.access-title {
+  color: $ink;
+  font-size: 27px;
+  font-weight: 750;
+}
+
+.access-copy {
+  margin-top: 9px;
+  color: $muted;
+  font-size: 20px;
+  line-height: 1.5;
+}
+
+.access-input {
+  height: 78px;
+  margin-top: 18px;
+  padding: 0 20px;
+  border: 2px solid $line;
+  border-radius: 16px;
+  background: #fff;
+  color: $ink;
+  font-size: 23px;
+  box-sizing: border-box;
+}
+
 .section {
   margin-bottom: 28px;
   padding: 32px;

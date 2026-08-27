@@ -24,12 +24,21 @@ export interface CreateGenerationRequest {
   readonly analysisId?: string;
   readonly directionId?: string;
   readonly parentJobId?: string;
+  readonly accessCode?: string;
 }
 
 export interface RefineGenerationRequest {
   readonly parentJobId: string;
   readonly imagePath: string;
   readonly instruction: string;
+  readonly accessCode?: string;
+}
+
+export interface TrialCapabilities {
+  readonly trialAccessRequired: boolean;
+  readonly trialDailyAnalysisLimit: number;
+  readonly trialDailyGenerationLimit: number;
+  readonly assetRetentionHours: number;
 }
 
 function createIdempotencyKey(): string {
@@ -78,6 +87,7 @@ async function uploadMultipart<TResponse>(options: {
   readonly timeoutMs: number;
   readonly fallbackErrorCode: string;
   readonly retryTransportOnce: boolean;
+  readonly accessCode?: string;
 }): Promise<TResponse> {
   const idempotencyKey = createIdempotencyKey();
 
@@ -91,6 +101,9 @@ async function uploadMultipart<TResponse>(options: {
         timeout: options.timeoutMs,
         header: {
           "Idempotency-Key": idempotencyKey,
+          ...(options.accessCode?.trim()
+            ? { "X-Trial-Access-Code": options.accessCode.trim() }
+            : {}),
         },
         formData: options.formData,
       });
@@ -202,6 +215,7 @@ export async function analyzeGarment(
     timeoutMs: ANALYSIS_REQUEST_TIMEOUT_MS,
     fallbackErrorCode: "GARMENT_ANALYSIS_FAILED",
     retryTransportOnce: false,
+    ...(input.accessCode ? { accessCode: input.accessCode } : {}),
   });
 }
 
@@ -215,6 +229,7 @@ export async function createGeneration(
     timeoutMs: GENERATION_SUBMIT_TIMEOUT_MS,
     fallbackErrorCode: "GARMENT_GENERATION_FAILED",
     retryTransportOnce: true,
+    ...(input.accessCode ? { accessCode: input.accessCode } : {}),
   });
   return waitForGenerationJob(parseGenerationJob(submitted));
 }
@@ -229,6 +244,27 @@ export async function refineGeneration(
     timeoutMs: GENERATION_SUBMIT_TIMEOUT_MS,
     fallbackErrorCode: "GARMENT_REFINEMENT_FAILED",
     retryTransportOnce: true,
+    ...(input.accessCode ? { accessCode: input.accessCode } : {}),
   });
   return waitForGenerationJob(parseGenerationJob(submitted));
+}
+
+export async function getTrialCapabilities(): Promise<TrialCapabilities> {
+  const response = await Taro.request<unknown>({
+    url: `${API_BASE_URL}/api/v1/capabilities`,
+    method: "GET",
+    credentials: "omit",
+    timeout: GENERATION_POLL_REQUEST_TIMEOUT_MS,
+  });
+  const payload = parsePayload(response.data);
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    throw apiErrorFromPayload(payload, "CAPABILITIES_REQUEST_FAILED");
+  }
+  const capabilities = payload as Partial<TrialCapabilities>;
+  return {
+    trialAccessRequired: capabilities.trialAccessRequired === true,
+    trialDailyAnalysisLimit: capabilities.trialDailyAnalysisLimit ?? 0,
+    trialDailyGenerationLimit: capabilities.trialDailyGenerationLimit ?? 0,
+    assetRetentionHours: capabilities.assetRetentionHours ?? 0,
+  };
 }

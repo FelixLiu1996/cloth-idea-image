@@ -27,6 +27,7 @@ export interface EnqueueGenerationJobInput {
   readonly createdAt: string;
   readonly idempotencyKey: string | undefined;
   readonly requestFingerprint: string;
+  readonly onAccepted?: () => void;
   readonly operation: () => Promise<StoredGenerationRecord>;
   readonly mapError: (error: unknown) => ApiErrorResponse;
 }
@@ -73,6 +74,8 @@ export class GenerationResultRepository {
         return { job: existingStatus, reused: true };
       }
     }
+
+    input.onAccepted?.();
 
     const queuedJob: GenerationJobStatusResponse = {
       jobId: input.jobId,

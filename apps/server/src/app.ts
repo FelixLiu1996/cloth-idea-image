@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 
 import cors from "@fastify/cors";
 import multipart, { type MultipartFile } from "@fastify/multipart";
@@ -39,6 +39,7 @@ import {
   IdempotencyKeyConflictError,
   type StoredGenerationRecord,
 } from "./generation-repository";
+import { TrialUsageLimitError, TrialUsagePolicy } from "./trial-usage-policy";
 
 const generationFieldsSchema = z.object({
   mode: z.enum(generationModes),
@@ -180,6 +181,11 @@ function normalizeError(error: unknown): NormalizedError {
     code = "IDEMPOTENCY_KEY_REUSED";
     message = error.message;
     retryable = false;
+  } else if (error instanceof TrialUsageLimitError) {
+    statusCode = error.statusCode;
+    code = error.code;
+    message = error.message;
+    retryable = error.retryable;
   } else if (error instanceof GarmentProviderError) {
     statusCode = providerStatus(error.code);
     code = error.code;
@@ -282,6 +288,26 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   const repository = options.repository ?? new GenerationResultRepository();
   const analysisRepository = options.analysisRepository ?? new GarmentAnalysisRepository();
   const analyzer = options.analyzer ?? new UnconfiguredGarmentAnalysisProvider();
+  const trialUsagePolicy = new TrialUsagePolicy({
+    dailyAnalysisLimit: options.config.trialDailyAnalysisLimit,
+    dailyGenerationLimit: options.config.trialDailyGenerationLimit,
+    maxConcurrentModelRequests: options.config.trialMaxConcurrentModelRequests,
+    generationMinIntervalMs: options.config.trialGenerationMinIntervalMs,
+  });
+
+  function assertTrialAccess(request: FastifyRequest): void {
+    const expectedCode = options.config.trialAccessCode;
+    if (!expectedCode) {
+      return;
+    }
+    const header = request.headers["x-trial-access-code"];
+    const receivedCode = (Array.isArray(header) ? header[0] : header)?.trim() ?? "";
+    const expectedDigest = createHash("sha256").update(expectedCode).digest();
+    const receivedDigest = createHash("sha256").update(receivedCode).digest();
+    if (!timingSafeEqual(expectedDigest, receivedDigest)) {
+      throw new RequestError(401, "AUTH_TRIAL_ACCESS_DENIED", "试用访问码不正确。", false);
+    }
+  }
 
   async function runGeneration(
     request: FastifyRequest,
@@ -363,7 +389,9 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       createdAt,
       idempotencyKey: readIdempotencyKey(request),
       requestFingerprint,
-      operation: () => runGeneration(request, jobId, createdAt, input),
+      onAccepted: () => trialUsagePolicy.reserveGeneration(),
+      operation: () =>
+        trialUsagePolicy.runGeneration(() => runGeneration(request, jobId, createdAt, input)),
       mapError: (error) => {
         const normalized = normalizeError(error);
         request.log.warn(
@@ -424,10 +452,15 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     analysisSchemaVersion: "garment-dna-v0.2",
     resultIterationEnabled: true,
     generationJobsAsync: true,
+    trialAccessRequired: options.config.trialAccessCode !== null,
+    trialDailyAnalysisLimit: options.config.trialDailyAnalysisLimit,
+    trialDailyGenerationLimit: options.config.trialDailyGenerationLimit,
+    assetRetentionHours: Math.round(options.config.assetRetentionMs / (60 * 60 * 1_000)),
     maxRefinementDepth,
   }));
 
   app.post("/api/v1/analyses", async (request, reply) => {
+    assertTrialAccess(request);
     const { fields, sourceImage } = await readMultipartRequest(request);
     const parsedFields = generationFieldsSchema.safeParse(fields);
     if (!parsedFields.success) {
@@ -441,34 +474,37 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     const brief: GarmentAnalysisBrief = parsedFields.data;
     const execution = await analysisRepository.executeOnce(
       readIdempotencyKey(request),
-      async () => {
-        const providerResult = await analyzer.analyze({
-          sourceImage,
-          brief,
-          schemaVersion: "garment-dna-v0.2",
-        });
-        const result = analysisRepository.save(sourceImage, providerResult);
-        request.log.info(
-          {
-            analysisId: result.analysisId,
-            provider: providerResult.provider,
-            model: providerResult.model,
-            providerRequestId: providerResult.providerRequestId,
-            schemaVersion: providerResult.analysis.schemaVersion,
-            durationMs: providerResult.durationMs,
-            attemptCount: providerResult.attemptCount,
-            usage: providerResult.usage,
-          },
-          "garment analysis completed",
-        );
-        return result;
-      },
+      () => trialUsagePolicy.reserveAnalysis(),
+      () =>
+        trialUsagePolicy.runAnalysis(async () => {
+          const providerResult = await analyzer.analyze({
+            sourceImage,
+            brief,
+            schemaVersion: "garment-dna-v0.2",
+          });
+          const result = analysisRepository.save(sourceImage, providerResult);
+          request.log.info(
+            {
+              analysisId: result.analysisId,
+              provider: providerResult.provider,
+              model: providerResult.model,
+              providerRequestId: providerResult.providerRequestId,
+              schemaVersion: providerResult.analysis.schemaVersion,
+              durationMs: providerResult.durationMs,
+              attemptCount: providerResult.attemptCount,
+              usage: providerResult.usage,
+            },
+            "garment analysis completed",
+          );
+          return result;
+        }),
     );
 
     return reply.code(execution.reused ? 200 : 201).send(execution.result);
   });
 
   app.post("/api/v1/generations", async (request, reply) => {
+    assertTrialAccess(request);
     const { fields, sourceImage } = await readMultipartRequest(request);
     const parsedFields = createGenerationFieldsSchema.safeParse(fields);
     if (!parsedFields.success) {
@@ -581,6 +617,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   app.post<{ Params: { jobId: string } }>(
     "/api/v1/generations/:jobId/refinements",
     async (request, reply) => {
+      assertTrialAccess(request);
       const { fields, sourceImage } = await readMultipartRequest(request);
       const parsedBody = refinementFieldsSchema.safeParse(fields);
       if (!parsedBody.success) {
@@ -684,6 +721,25 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     );
     return reply.code(normalized.statusCode).send(response);
   });
+
+  if (options.config.assetRetentionMs > 0) {
+    const pruneExpiredAssets = async () => {
+      try {
+        const removed = await assetStore.pruneExpiredResults(options.config.assetRetentionMs);
+        if (removed > 0) {
+          app.log.info({ removed }, "expired generated assets removed");
+        }
+      } catch (error) {
+        app.log.error({ error }, "generated asset cleanup failed");
+      }
+    };
+    await pruneExpiredAssets();
+    const cleanupTimer = setInterval(pruneExpiredAssets, options.config.assetCleanupIntervalMs);
+    cleanupTimer.unref();
+    app.addHook("onClose", async () => {
+      clearInterval(cleanupTimer);
+    });
+  }
 
   return app;
 }
