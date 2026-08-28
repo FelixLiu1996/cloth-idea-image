@@ -1,5 +1,5 @@
 {
-  "miniprogramRoot": "dist/",
+  "miniprogramRoot": "dist/weapp/",
   "projectname": "cloth-idea-image",
   "description": "AI clothing redesign assistant",
   "appid": "wx5baead52b4ba6dc1",

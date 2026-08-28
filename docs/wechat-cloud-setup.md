@@ -37,7 +37,7 @@ npm run build:weapp
 
 该命令会同时生成：
 
-- 小程序产物：`apps/client/dist/`
+- 小程序产物：`apps/client/dist/weapp/`
 - 云函数部署目录：`apps/client/cloudfunctions/garment-api/`
 
 `cloudfunctions/` 是构建产物，已被 Git 忽略，每次构建会重新生成。生成的部署包固定 `wx-server-sdk@4.0.2`，并覆盖其中存在安全告警的传递依赖；根项目和云函数部署包均需保持生产依赖审计为0项漏洞。可复现检查：

@@ -116,6 +116,10 @@ ASSET_RETENTION_HOURS=0
 npm run build:weapp
 ```
 
+- H5 产物：`apps/client/dist/h5/`
+- 微信小程序产物：`apps/client/dist/weapp/`
+- 微信开发者工具应导入 `apps/client`，并由 `project.config.json` 的 `miniprogramRoot` 自动读取 `dist/weapp/`。H5 与小程序使用独立目录，执行任一平台构建都不会覆盖另一端。
+
 如需绕过应用单独验证模型，可运行：
 
 ```bash

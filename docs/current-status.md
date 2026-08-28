@@ -52,6 +52,7 @@
 - 建立变更记录和模型评测记录。
 - 建立 npm workspace、共享 TypeScript、ESLint、Prettier、Vitest 和构建命令。
 - 建立 `apps/client` Taro 客户端，并通过 H5 与微信小程序生产构建。
+- H5 与微信小程序构建产物已隔离到 `dist/h5` 和 `dist/weapp`，整仓构建会同时生成并校验两端入口文件，避免 H5 构建覆盖开发者工具所需的 `app.json`。
 - 建立 `apps/server` Fastify API，完成健康检查、能力查询、生成和结果资源接口。
 - 建立 `packages/domain`，集中保存改款输入、输出、提示词和摘要规则。
 - 建立 `packages/application`，集中保存可被 Fastify 与微信云函数复用的业务用例、仓储端口和内存 Fake。

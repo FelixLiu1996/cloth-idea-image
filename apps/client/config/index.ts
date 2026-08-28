@@ -6,6 +6,7 @@ import devConfig from "./dev";
 import prodConfig from "./prod";
 
 const createConfig: UserConfigFn<"vite"> = async (merge) => {
+  const buildTarget = process.env.TARO_ENV ?? "h5";
   const baseConfig: UserConfigExport<"vite"> = {
     projectName: "cloth-idea-image",
     date: "2026-08-26",
@@ -17,7 +18,7 @@ const createConfig: UserConfigFn<"vite"> = async (merge) => {
       828: 1.81 / 2,
     },
     sourceRoot: "src",
-    outputRoot: "dist",
+    outputRoot: `dist/${buildTarget}`,
     plugins: [],
     alias: {
       "@tarojs/plugin-framework-react/dist/runtime": resolve(
