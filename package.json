@@ -14,7 +14,7 @@
   ],
   "scripts": {
     "build": "npm run build:packages && npm run build:server && npm run build:wechat-cloud && npm run build:client",
-    "build:client": "npm run build:h5 -w @cloth-idea/client",
+    "build:client": "npm run build:h5 -w @cloth-idea/client && npm run build:weapp -w @cloth-idea/client && node scripts/check-client-build-artifacts.mjs",
     "build:packages": "npm run build -w @cloth-idea/domain && npm run build -w @cloth-idea/application && npm run build -w @cloth-idea/model-providers",
     "build:server": "npm run build -w @cloth-idea/server",
     "build:wechat-cloud": "npm run build -w @cloth-idea/wechat-cloud",

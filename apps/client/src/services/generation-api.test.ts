@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createGeneration,
   getTrialCapabilities,
+  refineGeneration,
   type CreateGenerationRequest,
 } from "./generation-api";
 
@@ -174,5 +175,18 @@ describe("generation API service", () => {
     });
     await vi.runAllTimersAsync();
     await rejection;
+  });
+
+  it("keeps the local H5 refinement boundary explicit when the original image is unavailable", async () => {
+    await expect(
+      refineGeneration({
+        parentJobId: queued.jobId,
+        instruction: "袖型更宽松一点",
+      }),
+    ).rejects.toMatchObject({
+      code: "REFINEMENT_SOURCE_REQUIRED",
+      retryable: false,
+    });
+    expect(uploadFile).not.toHaveBeenCalled();
   });
 });

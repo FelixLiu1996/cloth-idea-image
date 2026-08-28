@@ -37,7 +37,7 @@ npm run build:weapp
 
 该命令会同时生成：
 
-- 小程序产物：`apps/client/dist/`
+- 小程序产物：`apps/client/dist/weapp/`
 - 云函数部署目录：`apps/client/cloudfunctions/garment-api/`
 
 `cloudfunctions/` 是构建产物，已被 Git 忽略，每次构建会重新生成。生成的部署包固定 `wx-server-sdk@4.0.2`，并覆盖其中存在安全告警的传递依赖；根项目和云函数部署包均需保持生产依赖审计为0项漏洞。可复现检查：
@@ -54,6 +54,17 @@ npm run audit:wechat-cloud
 ```bash
 npx --yes --package @cloudbase/cli@3.8.1 tcb fn deploy garment-api --json
 ```
+
+如果函数已经切换为真实 Provider，后续更新业务代码必须优先只替换函数代码，避免把 `cloudbaserc.json` 的 Fake 安全默认值和低额度写回线上：
+
+```bash
+npm run build:wechat-cloud
+npx --yes --package @cloudbase/cli@3.8.1 tcb fn code update garment-api \
+  --dir apps/client/cloudfunctions/garment-api \
+  --json
+```
+
+该命令不更新运行配置。首次创建函数、确实需要修改运行时或环境变量时，才使用完整部署或云控制台，并在操作后复核私密配置。
 
 也可以回到微信开发者工具并重新编译。如果左侧没有出现 `cloudfunctions/garment-api`，关闭后重新导入 `apps/client`。随后右键 `garment-api`，选择“上传并部署：云端安装依赖”。开发者工具首次创建函数时可能选择不同运行时；运行时不能通过普通配置更新，部署后必须在云控制台核对为 Node.js 20.19。超时设为180秒；基础设施探针不会接近该时限，真实 Provider 仍有独立的150秒请求预算。
 
@@ -265,3 +276,7 @@ WECHAT_CLOUD_EXPERIENCE_ACCESS_UNTIL=2026-09-30T15:59:59.000Z
 截止时间对应北京时间2026-09-30 23:59:59。到期后现有 owner 的 `trial_members` 记录继续有效，其他体验用户需要重新配置窗口或加入指纹白名单。直通模式不绕过 OpenID 数据隔离、幂等、用户/全局额度、执行租约和72小时资产清理。
 
 2026-08-28 已通过 CloudBase 的“仅更新函数代码”部署该能力，避免 `cloudbaserc.json` 的安全默认值覆盖线上真实配置。随后在服务端私密环境启用上述体验窗口并复核：`alibaba-qwen`、模型 Key、`qwen3.7-plus`、`qwen-image-2.0-pro-2026-06-22`、用户/全局50/50额度均保持不变；函数无微信上下文冷调用正常返回 `AUTH_WECHAT_CONTEXT_MISSING`。代码自动化已验证窗口内不查询指纹、到期回退以及错误配置失败关闭；首个不在 `trial_members` 的平台体验成员仍需完成一次真实账号验收。
+
+同日，自由文字反馈、轻量费用提示和父任务原图复用变更也已使用 `tcb fn code update` 仅更新 `garment-api` 代码，没有应用 `cloudbaserc.json` 的 Fake 环境变量。部署后 CLI 无微信上下文冷调用在4毫秒内返回预期 `AUTH_WECHAT_CONTEXT_MISSING`，未触发模型；小程序产物已使用 `wechat-cloud` 网关和当前云环境重新构建。自动化已经覆盖父任务原图复用、唯一子任务和原图过期不占额度。
+
+随后在真机只输入“上方拼接色变一下”并点击“生成修改后的下一版”，没有重新上传原图。任务 `6118a55f-9973-4547-ad69-214fcf599cff` 以 `refinement` / `refine` 成功，正确引用父任务 `a5becdb1-0c96-475d-a202-91873151e916`；父子执行输入的原图 SHA-256 完全一致。真实 Qwen Image 调用约13.9秒、`attempt=1`，只有1条绑定该子任务的幂等记录；同一准入时间点的用户/全局生图计数分别为10/13。真机展示版本2，用户确认结果没有异常。该记录验证了新交互、云端原图复用、父子任务和单次付费边界，不代表单个自然语言修改在所有服装上的视觉成功率。
