@@ -1463,3 +1463,102 @@ $line: #dedbd2;
     grid-column: 1 / -1;
   }
 }
+
+// Taro 会把微信端的 px 按 750 设计稿转换为 rpx。网页端原本舒适的 14–20px
+// 在小程序里会缩小一半，因此仅对微信端提高分析与结果区域的可读字号。
+.page-shell--weapp {
+  .preserve-footnote,
+  .direction-area-chip,
+  .direction-overview-label,
+  .direction-overview-value,
+  .direction-preserve-chip,
+  .change-area,
+  .change-reason,
+  .review-kind,
+  .review-current-status,
+  .review-issue-count,
+  .result-review-progress,
+  .history-operation {
+    font-size: 24px;
+  }
+
+  .confirmed-preserve-source,
+  .preserve-suggestion-confidence {
+    font-size: 24px;
+  }
+
+  .preserve-count,
+  .direction-expand-hint,
+  .direction-overview-copy,
+  .result-meta,
+  .review-quick-action-copy,
+  .review-secondary-link,
+  .review-resolution-copy,
+  .review-issue-copy,
+  .review-detail-note,
+  .result-review-instruction,
+  .review-status-action,
+  .history-count,
+  .history-version {
+    font-size: 26px;
+  }
+
+  .analysis-meta,
+  .preserve-confirmation-copy,
+  .confirmed-preserve-chip,
+  .preserve-empty,
+  .preserve-suggestion-label,
+  .custom-preserve-input,
+  .custom-preserve-button,
+  .direction-summary,
+  .recommendation-reason,
+  .direction-detail-title,
+  .change-instruction,
+  .risk-label,
+  .review-item,
+  .comparison-label,
+  .review-issue-item-title,
+  .result-review-item-title {
+    font-size: 28px;
+  }
+
+  .preserve-suggestion-value,
+  .preserve-subtitle,
+  .review-title,
+  .result-summary,
+  .review-quick-action-title,
+  .review-resolution-title,
+  .review-issue-title,
+  .review-apply-button,
+  .result-action,
+  .refinement-input,
+  .refinement-button,
+  .history-name {
+    font-size: 30px;
+  }
+
+  .preserve-confirmation-title,
+  .result-review-title,
+  .refinement-title {
+    font-size: 34px;
+  }
+
+  .direction-name {
+    font-size: 36px;
+  }
+
+  .recommended-badge,
+  .selected-badge {
+    font-size: 24px;
+  }
+
+  .refinement-copy {
+    font-size: 28px;
+  }
+
+  .review-issue-check {
+    width: 36px;
+    height: 36px;
+    font-size: 24px;
+  }
+}

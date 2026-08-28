@@ -489,7 +489,7 @@ export default function Index() {
   }
 
   return (
-    <View className="page-shell">
+    <View className={`page-shell ${process.env.TARO_ENV === "weapp" ? "page-shell--weapp" : ""}`}>
       <View className="hero">
         <Text className="eyebrow">AI GARMENT STUDIO</Text>
         <Text className="hero-title">从一件原款，找到下一件好卖的衣服</Text>
