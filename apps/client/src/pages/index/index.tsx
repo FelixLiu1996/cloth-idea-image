@@ -1,7 +1,9 @@
 import {
+  createGarmentRefinementInstruction,
   createGarmentResultReviewPlan,
   createPreserveItemSuggestions,
   findDesignDirection,
+  formatGarmentPreserveItem,
   garmentChangeAreaLabels,
   maximumConfirmedPreserveItems,
   maximumPreserveItemsTextLength,
@@ -78,6 +80,8 @@ const reviewStatusLabels: Record<Exclude<GarmentResultReviewStatus, "pending">, 
   fail: "未通过",
 };
 
+type ResultReviewMode = "idle" | "satisfied" | "issues" | "detailed";
+
 function latestMatchingResult(
   results: readonly GenerationApiResponse[],
   strategy: GenerationApiResponse["strategy"],
@@ -118,6 +122,7 @@ export default function Index() {
   const [reviewStatuses, setReviewStatuses] = useState<
     Record<string, Record<string, GarmentResultReviewStatus>>
   >({});
+  const [reviewModes, setReviewModes] = useState<Record<string, ResultReviewMode>>({});
 
   useEffect(() => {
     let active = true;
@@ -210,6 +215,12 @@ export default function Index() {
       direction: activeDirection,
     });
   }, [activeDirection, activeResult, confirmedPreserveItems, preserveItems]);
+  const activeReviewStatuses = activeResult ? (reviewStatuses[activeResult.jobId] ?? {}) : {};
+  const activeReviewMode = activeResult ? (reviewModes[activeResult.jobId] ?? "idle") : "idle";
+  const selectedReviewIssues = activeReviewPlan.filter((item) => {
+    const status = activeReviewStatuses[item.id] ?? "pending";
+    return status === "question" || status === "fail";
+  });
   const locksFrozen = results.length > 0;
 
   function clearDerivedState() {
@@ -222,6 +233,7 @@ export default function Index() {
     setActiveJobId(null);
     setRevisionInstruction("");
     setReviewStatuses({});
+    setReviewModes({});
     setErrorMessage("");
   }
 
@@ -437,6 +449,43 @@ export default function Index() {
         [itemId]: status,
       },
     }));
+  }
+
+  function setActiveReviewMode(mode: ResultReviewMode): void {
+    if (!activeResult) {
+      return;
+    }
+    setReviewModes((current) => ({ ...current, [activeResult.jobId]: mode }));
+  }
+
+  function markActiveResultSatisfied(): void {
+    if (!activeResult) {
+      return;
+    }
+    setReviewStatuses((current) => ({
+      ...current,
+      [activeResult.jobId]: Object.fromEntries(
+        activeReviewPlan.map((item) => [item.id, "pass" as const]),
+      ),
+    }));
+    setActiveReviewMode("satisfied");
+  }
+
+  function toggleReviewIssue(itemId: string): void {
+    const currentStatus = activeReviewStatuses[itemId] ?? "pending";
+    updateReviewStatus(
+      itemId,
+      currentStatus === "fail" || currentStatus === "question" ? "pending" : "fail",
+    );
+  }
+
+  function applySelectedReviewIssues(): void {
+    if (!image || selectedReviewIssues.length === 0) {
+      return;
+    }
+    setRevisionInstruction(createGarmentRefinementInstruction(selectedReviewIssues));
+    void Taro.showToast({ title: "已填入下方修改要求", icon: "success" });
+    void Taro.pageScrollTo({ selector: "#refinement-panel", duration: 300 });
   }
 
   return (
@@ -765,7 +814,7 @@ export default function Index() {
                         <View className="direction-preserve-list">
                           {directionPreserveItems.map((item) => (
                             <Text key={item} className="direction-preserve-chip">
-                              {item}
+                              {formatGarmentPreserveItem(item)}
                             </Text>
                           ))}
                         </View>
@@ -873,59 +922,193 @@ export default function Index() {
           <View className="result-review-panel">
             <View className="result-review-heading">
               <View>
-                <Text className="result-review-title">生成结果核对</Text>
+                <Text className="result-review-title">这版效果怎么样？</Text>
                 <Text className="result-review-copy">
-                  先进行人工确认，不额外调用付费模型；记录仅保留在本次页面中。
+                  不需要逐项确认；满意可以直接使用，有问题时再展开清单。
                 </Text>
               </View>
-              <Text className="result-review-progress">
-                {
-                  activeReviewPlan.filter(
-                    (item) =>
-                      (reviewStatuses[activeResult.jobId]?.[item.id] ?? "pending") !== "pending",
-                  ).length
-                }
-                /{activeReviewPlan.length}
-              </Text>
+              {activeReviewMode === "detailed" && (
+                <Text className="result-review-progress">
+                  {
+                    activeReviewPlan.filter(
+                      (item) => (activeReviewStatuses[item.id] ?? "pending") !== "pending",
+                    ).length
+                  }
+                  /{activeReviewPlan.length}
+                </Text>
+              )}
             </View>
-            <View className="result-review-list">
-              {activeReviewPlan.map((item) => {
-                const status = reviewStatuses[activeResult.jobId]?.[item.id] ?? "pending";
-                return (
-                  <View
-                    key={item.id}
-                    className={`result-review-item result-review-item--${status}`}
+
+            {activeReviewMode === "idle" && (
+              <>
+                <View className="review-quick-actions">
+                  <Button
+                    className="review-quick-action review-quick-action--satisfied"
+                    onClick={markActiveResultSatisfied}
                   >
-                    <View className="result-review-item-heading">
-                      <Text className={`review-kind review-kind--${item.kind}`}>
-                        {reviewKindLabels[item.kind]}
-                      </Text>
-                      <Text className="review-current-status">
-                        {status === "pending" ? "待确认" : reviewStatusLabels[status]}
-                      </Text>
-                    </View>
-                    <Text className="result-review-item-title">{item.title}</Text>
-                    <Text className="result-review-instruction">{item.instruction}</Text>
-                    <View className="review-status-actions">
-                      {(
-                        Object.keys(reviewStatusLabels) as Exclude<
-                          GarmentResultReviewStatus,
-                          "pending"
-                        >[]
-                      ).map((nextStatus) => (
-                        <View
-                          key={nextStatus}
-                          className={`review-status-action review-status-action--${nextStatus} ${status === nextStatus ? "review-status-action--active" : ""}`}
-                          onClick={() => updateReviewStatus(item.id, nextStatus)}
-                        >
-                          {reviewStatusLabels[nextStatus]}
-                        </View>
-                      ))}
-                    </View>
+                    <Text className="review-quick-action-title">满意，直接使用</Text>
+                    <Text className="review-quick-action-copy">保存图片或按此方向再生成</Text>
+                  </Button>
+                  <Button
+                    className="review-quick-action review-quick-action--issues"
+                    onClick={() => setActiveReviewMode("issues")}
+                  >
+                    <Text className="review-quick-action-title">需要修改</Text>
+                    <Text className="review-quick-action-copy">勾选问题并自动填写修改要求</Text>
+                  </Button>
+                </View>
+                <View
+                  className="review-secondary-link"
+                  onClick={() => setActiveReviewMode("detailed")}
+                >
+                  详细核对（可选）
+                </View>
+              </>
+            )}
+
+            {activeReviewMode === "satisfied" && (
+              <View className="review-resolution">
+                <Text className="review-resolution-title">已记录：这版满意</Text>
+                <Text className="review-resolution-copy">
+                  可以直接下载；这项记录仅保留在当前页面，不会额外调用模型。
+                </Text>
+                <View className="review-resolution-actions">
+                  <View
+                    className="review-secondary-link"
+                    onClick={() => setActiveReviewMode("issues")}
+                  >
+                    发现问题，需要修改
                   </View>
-                );
-              })}
-            </View>
+                  <View
+                    className="review-secondary-link"
+                    onClick={() => setActiveReviewMode("detailed")}
+                  >
+                    详细核对
+                  </View>
+                </View>
+              </View>
+            )}
+
+            {activeReviewMode === "issues" && (
+              <>
+                <View className="review-issue-heading">
+                  <Text className="review-issue-title">勾选需要修正的问题</Text>
+                  <Text className="review-issue-count">已选 {selectedReviewIssues.length} 项</Text>
+                </View>
+                <Text className="review-issue-copy">
+                  正常的项目不用点击，只选择确实有问题的部分。
+                </Text>
+                <View className="review-issue-list">
+                  {activeReviewPlan.map((item) => {
+                    const status = activeReviewStatuses[item.id] ?? "pending";
+                    const selected = status === "question" || status === "fail";
+                    return (
+                      <View
+                        key={item.id}
+                        className={`review-issue-item ${selected ? "review-issue-item--selected" : ""}`}
+                        onClick={() => toggleReviewIssue(item.id)}
+                      >
+                        <Text className="review-issue-check">{selected ? "✓" : ""}</Text>
+                        <View className="review-issue-content">
+                          <Text className={`review-kind review-kind--${item.kind}`}>
+                            {reviewKindLabels[item.kind]}
+                          </Text>
+                          <Text className="review-issue-item-title">{item.title}</Text>
+                        </View>
+                      </View>
+                    );
+                  })}
+                </View>
+                <Button
+                  className="review-apply-button"
+                  disabled={!image || selectedReviewIssues.length === 0}
+                  onClick={applySelectedReviewIssues}
+                >
+                  {!image
+                    ? "重新上传原图后可继续修改"
+                    : selectedReviewIssues.length === 0
+                      ? "请先勾选问题"
+                      : `将 ${selectedReviewIssues.length} 个问题填入修改要求`}
+                </Button>
+                <View className="review-resolution-actions">
+                  <View
+                    className="review-secondary-link"
+                    onClick={() => setActiveReviewMode("idle")}
+                  >
+                    返回
+                  </View>
+                  <View
+                    className="review-secondary-link"
+                    onClick={() => setActiveReviewMode("detailed")}
+                  >
+                    切换到详细核对
+                  </View>
+                </View>
+              </>
+            )}
+
+            {activeReviewMode === "detailed" && (
+              <>
+                <Text className="review-detail-note">
+                  详细核对仅用于专业评审；存疑和未通过项目可自动整理成修改要求。
+                </Text>
+                <View className="result-review-list">
+                  {activeReviewPlan.map((item) => {
+                    const status = activeReviewStatuses[item.id] ?? "pending";
+                    return (
+                      <View
+                        key={item.id}
+                        className={`result-review-item result-review-item--${status}`}
+                      >
+                        <View className="result-review-item-heading">
+                          <Text className={`review-kind review-kind--${item.kind}`}>
+                            {reviewKindLabels[item.kind]}
+                          </Text>
+                          <Text className="review-current-status">
+                            {status === "pending" ? "待确认" : reviewStatusLabels[status]}
+                          </Text>
+                        </View>
+                        <Text className="result-review-item-title">{item.title}</Text>
+                        <Text className="result-review-instruction">{item.instruction}</Text>
+                        <View className="review-status-actions">
+                          {(
+                            Object.keys(reviewStatusLabels) as Exclude<
+                              GarmentResultReviewStatus,
+                              "pending"
+                            >[]
+                          ).map((nextStatus) => (
+                            <View
+                              key={nextStatus}
+                              className={`review-status-action review-status-action--${nextStatus} ${status === nextStatus ? "review-status-action--active" : ""}`}
+                              onClick={() => updateReviewStatus(item.id, nextStatus)}
+                            >
+                              {reviewStatusLabels[nextStatus]}
+                            </View>
+                          ))}
+                        </View>
+                      </View>
+                    );
+                  })}
+                </View>
+                {selectedReviewIssues.length > 0 && (
+                  <Button
+                    className="review-apply-button"
+                    disabled={!image}
+                    onClick={applySelectedReviewIssues}
+                  >
+                    {!image
+                      ? "重新上传原图后可继续修改"
+                      : `将 ${selectedReviewIssues.length} 个问题填入修改要求`}
+                  </Button>
+                )}
+                <View
+                  className="review-secondary-link review-secondary-link--standalone"
+                  onClick={() => setActiveReviewMode("idle")}
+                >
+                  返回简洁模式
+                </View>
+              </>
+            )}
           </View>
 
           <View className="result-actions">
@@ -946,7 +1129,7 @@ export default function Index() {
           </View>
 
           {image ? (
-            <View className="refinement-panel">
+            <View id="refinement-panel" className="refinement-panel">
               <Text className="refinement-title">继续修改当前结果</Text>
               <Text className="refinement-copy">
                 系统会从原图重新生成下一版，原始保留项、选中方向和累计修改继续生效。

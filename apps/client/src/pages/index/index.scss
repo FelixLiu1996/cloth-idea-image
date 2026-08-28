@@ -960,6 +960,206 @@ $line: #dedbd2;
   line-height: 1.5;
 }
 
+.review-quick-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 11px;
+  margin-top: 18px;
+}
+
+.review-quick-action {
+  display: flex;
+  min-height: 104px;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  margin: 0;
+  padding: 15px;
+  border-radius: 14px;
+  line-height: 1.35;
+  text-align: left;
+  box-sizing: border-box;
+}
+
+.review-quick-action::after,
+.review-apply-button::after {
+  border: 0;
+}
+
+.review-quick-action--satisfied {
+  border: 1px solid rgba(51, 112, 72, 0.35);
+  background: #edf6ee;
+  color: #285a38;
+}
+
+.review-quick-action--issues {
+  border: 1px solid rgba(216, 109, 53, 0.35);
+  background: #fff4eb;
+  color: #9a4c25;
+}
+
+.review-quick-action-title,
+.review-quick-action-copy,
+.review-resolution-title,
+.review-resolution-copy,
+.review-issue-copy,
+.review-detail-note,
+.review-issue-item-title {
+  display: block;
+}
+
+.review-quick-action-title {
+  font-size: 18px;
+  font-weight: 750;
+}
+
+.review-quick-action-copy {
+  margin-top: 5px;
+  color: $muted;
+  font-size: 14px;
+}
+
+.review-secondary-link {
+  padding: 14px 8px 2px;
+  color: $muted;
+  font-size: 15px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.review-secondary-link--standalone {
+  margin-top: 8px;
+}
+
+.review-resolution {
+  margin-top: 18px;
+  padding: 17px;
+  border: 1px solid rgba(51, 112, 72, 0.3);
+  border-radius: 14px;
+  background: #edf6ee;
+}
+
+.review-resolution-title {
+  color: #285a38;
+  font-size: 19px;
+  font-weight: 750;
+}
+
+.review-resolution-copy,
+.review-issue-copy,
+.review-detail-note {
+  margin-top: 6px;
+  color: $muted;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.review-resolution-actions {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 8px;
+}
+
+.review-issue-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.review-issue-title {
+  font-size: 19px;
+  font-weight: 750;
+}
+
+.review-issue-count {
+  color: $accent;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.review-issue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.review-issue-item {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 12px;
+  border: 1px solid $line;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.review-issue-item--selected {
+  border-color: rgba(216, 109, 53, 0.6);
+  background: #fff4eb;
+}
+
+.review-issue-check {
+  display: flex;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #c8c4b9;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.review-issue-item--selected .review-issue-check {
+  border-color: $accent;
+  background: $accent;
+}
+
+.review-issue-content {
+  min-width: 0;
+  flex: 1;
+}
+
+.review-issue-item-title {
+  margin-top: 6px;
+  color: $ink;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.review-apply-button {
+  display: flex;
+  height: 66px;
+  align-items: center;
+  justify-content: center;
+  margin-top: 14px;
+  border-radius: 13px;
+  background: $accent;
+  color: #fff;
+  font-size: 18px;
+  font-weight: 750;
+  line-height: 1;
+}
+
+.review-apply-button[disabled] {
+  background: #d2cfc6;
+  color: #f4f2ed;
+}
+
+.review-detail-note {
+  margin-top: 16px;
+  padding: 11px 13px;
+  border-radius: 11px;
+  background: #f4f1ea;
+}
+
 .result-review-progress {
   flex: 0 0 auto;
   padding: 7px 11px;

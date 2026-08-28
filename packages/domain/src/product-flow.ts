@@ -90,6 +90,12 @@ export function serializePreserveItems(items: readonly string[]): string {
   return mergePreserveItems(items).join("，");
 }
 
+export function formatGarmentPreserveItem(item: string): string {
+  const normalized = item.trim();
+  const matchingKey = garmentFactKeys.find((key) => key === normalized);
+  return matchingKey ? garmentFactLabels[matchingKey] : normalized;
+}
+
 export interface PreserveItemSuggestion {
   readonly id: `fact:${GarmentFactKey}`;
   readonly factKey: GarmentFactKey;
@@ -145,7 +151,9 @@ export function createGarmentResultReviewPlan(
   input: CreateGarmentResultReviewPlanInput,
 ): readonly GarmentResultReviewItem[] {
   const direction = input.direction ?? null;
-  const preserveItems = mergePreserveItems(input.preserveItems, direction?.preserve ?? []);
+  const preserveItems = mergePreserveItems(input.preserveItems, direction?.preserve ?? []).map(
+    formatGarmentPreserveItem,
+  );
   const preservationItems = preserveItems.map((item, index) => ({
     id: `preservation-${index + 1}`,
     kind: "preservation" as const,
@@ -181,4 +189,27 @@ export function createGarmentResultReviewPlan(
       instruction: "确认没有重复部件、悬空结构、明显噪点、锐化、偏色或不合理缝制。",
     },
   ];
+}
+
+export function createGarmentRefinementInstruction(
+  reviewItems: readonly GarmentResultReviewItem[],
+): string {
+  const issueInstructions = reviewItems.map((item) => {
+    if (item.kind === "preservation") {
+      return `恢复并清晰保留“${item.title}”`;
+    }
+    if (item.kind === "change") {
+      return `完整落实“${item.title}”`;
+    }
+    return `修正“${item.title}”`;
+  });
+
+  if (issueInstructions.length === 0) {
+    return "";
+  }
+
+  return `请修正以下问题：${issueInstructions.join("；")}。其余已确认元素和设计方向保持不变。`.slice(
+    0,
+    500,
+  );
 }

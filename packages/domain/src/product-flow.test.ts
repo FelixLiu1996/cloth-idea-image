@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import type { GarmentAnalysis } from "./garment-analysis";
 import {
+  createGarmentRefinementInstruction,
   createGarmentResultReviewPlan,
   createPreserveItemSuggestions,
+  formatGarmentPreserveItem,
   parsePreserveItems,
   serializePreserveItems,
 } from "./product-flow";
@@ -95,5 +97,30 @@ describe("garment result review plan", () => {
         expect.objectContaining({ kind: "anomaly", title: "文字与水印" }),
       ]),
     );
+  });
+
+  it("localizes direction preserve keys and compiles selected issues into refinement text", () => {
+    expect(formatGarmentPreserveItem("fabric")).toBe("面料");
+    expect(formatGarmentPreserveItem("自定义结构")).toBe("自定义结构");
+
+    const instruction = createGarmentRefinementInstruction([
+      {
+        id: "preservation-1",
+        kind: "preservation",
+        title: "领型：立领",
+        instruction: "确认保留。",
+      },
+      {
+        id: "anomaly-text-watermark",
+        kind: "anomaly",
+        title: "文字与水印",
+        instruction: "确认没有文字。",
+      },
+    ]);
+
+    expect(instruction).toContain("恢复并清晰保留“领型：立领”");
+    expect(instruction).toContain("修正“文字与水印”");
+    expect(instruction).toContain("其余已确认元素和设计方向保持不变");
+    expect(createGarmentRefinementInstruction([])).toBe("");
   });
 });
