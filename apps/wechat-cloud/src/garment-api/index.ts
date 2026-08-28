@@ -14,6 +14,10 @@ import { WechatCloudGarmentAssetStorage } from "./cloud-asset-storage";
 import { createGarmentCloudBusinessHandler, isWechatCloudBusinessAction } from "./business-handler";
 import { createGarmentCleanupHandler, isGarmentCleanupTimerEvent } from "./cleanup-handler";
 import { createGarmentCloudProviderConfiguration } from "./provider-config";
+import {
+  createWechatCloudTrialAccessConfiguration,
+  createWechatCloudTrialMemberAuthorizer,
+} from "./trial-access-config";
 
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV as unknown as string });
 
@@ -120,7 +124,7 @@ function isMissingDocument(error: unknown): boolean {
   return candidate.errCode === -1 || candidate.code === "DATABASE_REQUEST_DOCUMENT_NOT_FOUND";
 }
 
-async function isTrialMember(viewerFingerprint: string): Promise<boolean> {
+async function isFingerprintTrialMember(viewerFingerprint: string): Promise<boolean> {
   try {
     const result = await trialMembers.doc(viewerFingerprint).get();
     const data = (result as { readonly data?: unknown }).data;
@@ -135,6 +139,20 @@ async function isTrialMember(viewerFingerprint: string): Promise<boolean> {
     }
     throw error;
   }
+}
+
+const trialAccessConfiguration = createWechatCloudTrialAccessConfiguration();
+const isTrialMember = createWechatCloudTrialMemberAuthorizer(
+  trialAccessConfiguration,
+  isFingerprintTrialMember,
+);
+if (trialAccessConfiguration.configurationError) {
+  console.warn(
+    JSON.stringify({
+      event: "wechat-cloud-trial-access-configuration-warning",
+      message: trialAccessConfiguration.configurationError,
+    }),
+  );
 }
 
 const handler = createGarmentCloudHandler({
