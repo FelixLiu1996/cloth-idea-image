@@ -197,12 +197,39 @@ function parseImageReference(
   };
 }
 
+function parseOptionalImageReference(
+  value: Record<string, unknown>,
+): WechatCloudSourceImageReference | null | undefined {
+  const hasImageField = ["cloudFileId", "fileName", "mimeType", "size"].some(
+    (key) => value[key] !== undefined,
+  );
+  return hasImageField ? parseImageReference(value) : undefined;
+}
+
 function parseRequest(value: unknown): WechatCloudBusinessRequest | null {
   if (!isRecord(value) || typeof value.action !== "string") {
     return null;
   }
   if (value.action === "get-generation-job" && typeof value.jobId === "string") {
     return { action: value.action, jobId: value.jobId };
+  }
+  if (
+    value.action === "create-refinement" &&
+    typeof value.idempotencyKey === "string" &&
+    typeof value.parentJobId === "string" &&
+    typeof value.instruction === "string"
+  ) {
+    const image = parseOptionalImageReference(value);
+    if (image === null) {
+      return null;
+    }
+    return {
+      action: value.action,
+      idempotencyKey: value.idempotencyKey,
+      parentJobId: value.parentJobId,
+      instruction: value.instruction,
+      ...(image ?? {}),
+    };
   }
   const image = parseImageReference(value);
   if (!image) {
@@ -231,27 +258,40 @@ function parseRequest(value: unknown): WechatCloudBusinessRequest | null {
       ...(typeof value.parentJobId === "string" ? { parentJobId: value.parentJobId } : {}),
     };
   }
-  if (
-    value.action === "create-refinement" &&
-    typeof value.parentJobId === "string" &&
-    typeof value.instruction === "string"
-  ) {
-    return {
-      action: value.action,
-      ...image,
-      parentJobId: value.parentJobId,
-      instruction: value.instruction,
-    };
-  }
   return null;
+}
+
+function refinementSourceImageReference(
+  input: CreateWechatCloudRefinementRequest,
+): WechatCloudSourceImageReference | null {
+  if (
+    input.cloudFileId === undefined ||
+    input.fileName === undefined ||
+    input.mimeType === undefined ||
+    input.size === undefined
+  ) {
+    return null;
+  }
+  return {
+    idempotencyKey: input.idempotencyKey,
+    cloudFileId: input.cloudFileId,
+    fileName: input.fileName,
+    mimeType: input.mimeType,
+    size: input.size,
+  };
+}
+
+function validateIdempotencyKey(idempotencyKey: string): string | null {
+  return /^[A-Za-z0-9._-]{8,128}$/.test(idempotencyKey) ? null : "幂等键格式不正确。";
 }
 
 function validateImageReference(
   input: WechatCloudSourceImageReference,
   ownerId: string,
 ): string | null {
-  if (!/^[A-Za-z0-9._-]{8,128}$/.test(input.idempotencyKey)) {
-    return "幂等键格式不正确。";
+  const idempotencyMessage = validateIdempotencyKey(input.idempotencyKey);
+  if (idempotencyMessage) {
+    return idempotencyMessage;
   }
   if (!input.cloudFileId.startsWith("cloud://") || input.cloudFileId.length > 1_024) {
     return "云文件引用格式不正确。";
@@ -629,18 +669,44 @@ interface GarmentGenerationExecutionPayload {
 
 class InvalidGenerationExecutionPayloadError extends Error {}
 class ProviderConfigurationChangedError extends Error {}
+class ParentAssetExpiredError extends Error {}
+
+async function resolveGenerationSource(
+  dependencies: GarmentCloudBusinessHandlerDependencies,
+  ownerId: string,
+  request: CreateWechatCloudGenerationRequest | CreateWechatCloudRefinementRequest,
+  now: string,
+): Promise<WechatCloudSourceImageReference> {
+  if (request.action === "create-generation") {
+    return request;
+  }
+  const uploadedSource = refinementSourceImageReference(request);
+  if (uploadedSource) {
+    return uploadedSource;
+  }
+  const parent = await dependencies.persistence.tasks.findById(ownerId, request.parentJobId, now);
+  if (!parent || parent.status.status !== "succeeded") {
+    throw new RangeError("没有找到可以继续修改的上一版结果。");
+  }
+  const parentPayload = parseGenerationExecutionPayload(parent.executionPayload);
+  if (!parentPayload || parentPayload.providerMode !== dependencies.providerMode) {
+    throw new RangeError("上一版结果无法复用原图，请重新上传原图后再继续修改。");
+  }
+  return parentPayload.source;
+}
 
 async function resolveGenerationContext(
   dependencies: GarmentCloudBusinessHandlerDependencies,
   ownerId: string,
   request: CreateWechatCloudGenerationRequest | CreateWechatCloudRefinementRequest,
+  source: WechatCloudSourceImageReference,
   now: string,
   bytes: Uint8Array,
 ): Promise<GarmentGenerationContext> {
   const sourceImage: SourceImageInput = {
     bytes,
-    fileName: request.fileName,
-    mimeType: request.mimeType,
+    fileName: source.fileName,
+    mimeType: source.mimeType,
   };
   const sourceImageSha256 = hashBytes(bytes);
   if (request.action === "create-refinement") {
@@ -858,19 +924,13 @@ function parseGenerationExecutionPayload(value: unknown): GarmentGenerationExecu
 
 function generationExecutionPayload(
   providerMode: ExecutableProviderMode,
-  request: CreateWechatCloudGenerationRequest | CreateWechatCloudRefinementRequest,
+  source: WechatCloudSourceImageReference,
   context: GarmentGenerationContext,
 ): GarmentGenerationExecutionPayload {
   return {
     version: "garment-generation-v2",
     providerMode,
-    source: {
-      idempotencyKey: request.idempotencyKey,
-      cloudFileId: request.cloudFileId,
-      fileName: request.fileName,
-      mimeType: request.mimeType,
-      size: request.size,
-    },
+    source,
     context,
   };
 }
@@ -1146,11 +1206,31 @@ async function createGeneration(
   if (providerMode === "disabled") {
     throw new ProviderConfigurationChangedError();
   }
-  const bytes = await dependencies.storage.read(request.cloudFileId);
-  if (bytes.byteLength !== request.size) {
+  const source = await resolveGenerationSource(dependencies, ownerId, request, now);
+  const sourceValidationMessage = validateImageReference(source, ownerId);
+  if (sourceValidationMessage) {
+    throw new RangeError(sourceValidationMessage);
+  }
+  let bytes: Uint8Array;
+  try {
+    bytes = await dependencies.storage.read(source.cloudFileId);
+  } catch (error) {
+    if (request.action === "create-refinement" && !refinementSourceImageReference(request)) {
+      throw new ParentAssetExpiredError();
+    }
+    throw error;
+  }
+  if (bytes.byteLength !== source.size) {
     throw new Error("uploaded image size mismatch");
   }
-  const context = await resolveGenerationContext(dependencies, ownerId, request, now, bytes);
+  const context = await resolveGenerationContext(
+    dependencies,
+    ownerId,
+    request,
+    source,
+    now,
+    bytes,
+  );
   const proposedJobId = (dependencies.createResourceId ?? randomUUID)();
   const expiresAt = addHours(now, dependencies.assetRetentionHours);
   const admission = await new GenerationTaskAdmissionService(dependencies.persistence).admit({
@@ -1158,7 +1238,7 @@ async function createGeneration(
     action,
     idempotencyKey: request.idempotencyKey,
     requestFingerprint: fingerprint,
-    executionPayload: generationExecutionPayload(providerMode, request, context),
+    executionPayload: generationExecutionPayload(providerMode, source, context),
     jobId: proposedJobId,
     statusUrl: `wechat-cloud://generation-jobs/${proposedJobId}`,
     createdAt: now,
@@ -1168,9 +1248,9 @@ async function createGeneration(
       assetId: `source-${proposedJobId}`,
       ownerId,
       kind: "source",
-      fileId: request.cloudFileId,
-      mimeType: request.mimeType,
-      size: request.size,
+      fileId: source.cloudFileId,
+      mimeType: source.mimeType,
+      size: source.size,
       createdAt: now,
       expiresAt,
     },
@@ -1207,6 +1287,14 @@ function mapKnownError(
         ? "同一分析请求仍在云端执行，请稍后重试。"
         : "分析执行可能在模型调用后中断，已停止自动重试以避免重复计费。",
       error.code === "ANALYSIS_EXECUTION_IN_PROGRESS",
+    );
+  }
+  if (error instanceof ParentAssetExpiredError) {
+    return apiError(
+      dependencies,
+      "PARENT_ASSET_EXPIRED",
+      "继续修改所需的原图已经过期，请重新上传原图后再试。",
+      false,
     );
   }
   if (error instanceof GarmentProviderError) {
@@ -1277,7 +1365,13 @@ export function createGarmentCloudBusinessHandler(
           : apiError(dependencies, "GENERATION_JOB_NOT_FOUND", "没有找到对应的生成任务。", false);
       }
 
-      const validationMessage = validateImageReference(request, ownerId);
+      const refinementSource =
+        request.action === "create-refinement" ? refinementSourceImageReference(request) : null;
+      const validationMessage =
+        request.action === "create-refinement"
+          ? (validateIdempotencyKey(request.idempotencyKey) ??
+            (refinementSource ? validateImageReference(refinementSource, ownerId) : null))
+          : validateImageReference(request, ownerId);
       if (validationMessage) {
         return apiError(
           dependencies,

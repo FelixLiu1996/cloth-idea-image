@@ -351,6 +351,60 @@ describe("WeChat cloud garment gateway", () => {
     expect(pending.value).toBeNull();
   });
 
+  it("creates a refinement without re-uploading when the parent cloud source is reusable", async () => {
+    const pending = memoryPending();
+    const refinedResult: GenerationApiResponse = {
+      ...result,
+      jobId: "00000000-0000-4000-8000-000000000002",
+      operation: "refine",
+      parentJobId: result.jobId,
+      revisionInstruction: "胸前只保留一个斜插袋",
+    };
+    const uploadFile = vi.fn();
+    const callFunction = vi.fn().mockImplementation(({ data }) => {
+      if (data.action === "create-refinement") {
+        return Promise.resolve({
+          result: {
+            ok: true,
+            data: {
+              jobId: refinedResult.jobId,
+              status: "queued",
+              statusUrl: `wechat-cloud://generation-jobs/${refinedResult.jobId}`,
+              createdAt: refinedResult.createdAt,
+              updatedAt: refinedResult.createdAt,
+            },
+          },
+        });
+      }
+      return Promise.resolve({ result: { ok: true, data: refinedResult } });
+    });
+    const gateway = new WechatCloudGarmentGateway(
+      { callFunction, uploadFile } as WechatCloudGarmentClient,
+      pending,
+    );
+
+    await expect(
+      gateway.refineGeneration({
+        parentJobId: result.jobId,
+        instruction: "胸前只保留一个斜插袋",
+      }),
+    ).resolves.toEqual(refinedResult);
+    expect(uploadFile).not.toHaveBeenCalled();
+    expect(callFunction).toHaveBeenCalledWith({
+      name: "garment-api",
+      data: expect.objectContaining({
+        action: "create-refinement",
+        parentJobId: result.jobId,
+        instruction: "胸前只保留一个斜插袋",
+        idempotencyKey: expect.any(String),
+      }),
+    });
+    const refinementRequest = callFunction.mock.calls.find(
+      ([input]) => input.data.action === "create-refinement",
+    )?.[0].data;
+    expect(refinementRequest).not.toHaveProperty("cloudFileId");
+  });
+
   it("does not let an older restored task clear a newer pending job", async () => {
     const pending = memoryPending(result.jobId);
     const newerJobId = "00000000-0000-4000-8000-000000000002";

@@ -123,6 +123,8 @@ export default function Index() {
     Record<string, Record<string, GarmentResultReviewStatus>>
   >({});
   const [reviewModes, setReviewModes] = useState<Record<string, ResultReviewMode>>({});
+  const [reviewFeedbacks, setReviewFeedbacks] = useState<Record<string, string>>({});
+  const [reviewChecklistOpen, setReviewChecklistOpen] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     let active = true;
@@ -217,10 +219,20 @@ export default function Index() {
   }, [activeDirection, activeResult, confirmedPreserveItems, preserveItems]);
   const activeReviewStatuses = activeResult ? (reviewStatuses[activeResult.jobId] ?? {}) : {};
   const activeReviewMode = activeResult ? (reviewModes[activeResult.jobId] ?? "idle") : "idle";
+  const activeReviewFeedback = activeResult ? (reviewFeedbacks[activeResult.jobId] ?? "") : "";
+  const activeReviewChecklistOpen = activeResult
+    ? (reviewChecklistOpen[activeResult.jobId] ?? false)
+    : false;
   const selectedReviewIssues = activeReviewPlan.filter((item) => {
     const status = activeReviewStatuses[item.id] ?? "pending";
     return status === "question" || status === "fail";
   });
+  const activeReviewInstruction = createGarmentRefinementInstruction(
+    selectedReviewIssues,
+    activeReviewFeedback,
+  );
+  const canGenerateReviewRevision =
+    selectedReviewIssues.length > 0 || activeReviewFeedback.trim().length >= 2;
   const locksFrozen = results.length > 0;
 
   function clearDerivedState() {
@@ -234,6 +246,8 @@ export default function Index() {
     setRevisionInstruction("");
     setReviewStatuses({});
     setReviewModes({});
+    setReviewFeedbacks({});
+    setReviewChecklistOpen({});
     setErrorMessage("");
   }
 
@@ -340,20 +354,20 @@ export default function Index() {
     }
   }
 
-  async function refineCurrentResult() {
-    const instruction = revisionInstruction.trim();
-    if (!activeResult || !image || instruction.length < 2 || busy || modelRequestInFlight.current) {
+  async function refineCurrentResult(instructionOverride?: string) {
+    const instruction = (instructionOverride ?? revisionInstruction).trim();
+    if (!activeResult || instruction.length < 2 || busy || modelRequestInFlight.current) {
       return;
     }
 
+    const parentJobId = activeResult.jobId;
     modelRequestInFlight.current = true;
     setRefining(true);
     setErrorMessage("");
     try {
       const nextResult = await garmentGateway.refineGeneration({
-        parentJobId: activeResult.jobId,
-        imagePath: image.path,
-        imageSize: image.size,
+        parentJobId,
+        ...(image ? { imagePath: image.path, imageSize: image.size } : {}),
         instruction,
         ...(trialAccessCode.trim() ? { accessCode: trialAccessCode.trim() } : {}),
       });
@@ -365,6 +379,7 @@ export default function Index() {
       setActiveJobId(nextResult.jobId);
       setSelectedDirectionId(nextResult.directionId);
       setRevisionInstruction("");
+      setReviewFeedbacks((current) => ({ ...current, [parentJobId]: "" }));
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "继续修改失败，请稍后重试。");
     } finally {
@@ -479,13 +494,37 @@ export default function Index() {
     );
   }
 
+  function updateActiveReviewFeedback(value: string): void {
+    if (!activeResult) {
+      return;
+    }
+    setReviewFeedbacks((current) => ({ ...current, [activeResult.jobId]: value }));
+  }
+
+  function toggleActiveReviewChecklist(): void {
+    if (!activeResult) {
+      return;
+    }
+    setReviewChecklistOpen((current) => ({
+      ...current,
+      [activeResult.jobId]: !(current[activeResult.jobId] ?? false),
+    }));
+  }
+
   function applySelectedReviewIssues(): void {
-    if (!image || selectedReviewIssues.length === 0) {
+    if (selectedReviewIssues.length === 0) {
       return;
     }
     setRevisionInstruction(createGarmentRefinementInstruction(selectedReviewIssues));
     void Taro.showToast({ title: "已填入下方修改要求", icon: "success" });
     void Taro.pageScrollTo({ selector: "#refinement-panel", duration: 300 });
+  }
+
+  function generateReviewRevision(): void {
+    if (!canGenerateReviewRevision || activeReviewInstruction.length < 2) {
+      return;
+    }
+    void refineCurrentResult(activeReviewInstruction);
   }
 
   return (
@@ -954,7 +993,7 @@ export default function Index() {
                     onClick={() => setActiveReviewMode("issues")}
                   >
                     <Text className="review-quick-action-title">需要修改</Text>
-                    <Text className="review-quick-action-copy">勾选问题并自动填写修改要求</Text>
+                    <Text className="review-quick-action-copy">直接描述，或勾选常见问题</Text>
                   </Button>
                 </View>
                 <View
@@ -992,44 +1031,63 @@ export default function Index() {
             {activeReviewMode === "issues" && (
               <>
                 <View className="review-issue-heading">
-                  <Text className="review-issue-title">勾选需要修正的问题</Text>
+                  <Text className="review-issue-title">直接写你想怎么改</Text>
                   <Text className="review-issue-count">已选 {selectedReviewIssues.length} 项</Text>
                 </View>
                 <Text className="review-issue-copy">
-                  正常的项目不用点击，只选择确实有问题的部分。
+                  不需要理解专业分类，用自己的话描述即可；下方常见问题可选。
                 </Text>
-                <View className="review-issue-list">
-                  {activeReviewPlan.map((item) => {
-                    const status = activeReviewStatuses[item.id] ?? "pending";
-                    const selected = status === "question" || status === "fail";
-                    return (
-                      <View
-                        key={item.id}
-                        className={`review-issue-item ${selected ? "review-issue-item--selected" : ""}`}
-                        onClick={() => toggleReviewIssue(item.id)}
-                      >
-                        <Text className="review-issue-check">{selected ? "✓" : ""}</Text>
-                        <View className="review-issue-content">
-                          <Text className={`review-kind review-kind--${item.kind}`}>
-                            {reviewKindLabels[item.kind]}
-                          </Text>
-                          <Text className="review-issue-item-title">{item.title}</Text>
-                        </View>
-                      </View>
-                    );
-                  })}
+                <Textarea
+                  className="review-feedback-input"
+                  value={activeReviewFeedback}
+                  maxlength={500}
+                  placeholder="例如：胸前只保留一个斜插袋，袖口格纹不变，整体不要太宽松"
+                  onInput={(event) => updateActiveReviewFeedback(event.detail.value)}
+                />
+                <View className="review-checklist-toggle" onClick={toggleActiveReviewChecklist}>
+                  <Text className="review-checklist-label">常见问题（可选）</Text>
+                  <Text className="review-checklist-state">
+                    {activeReviewChecklistOpen ? "收起" : "展开"}
+                  </Text>
                 </View>
+                {activeReviewChecklistOpen && (
+                  <View className="review-issue-list">
+                    {activeReviewPlan.map((item) => {
+                      const status = activeReviewStatuses[item.id] ?? "pending";
+                      const selected = status === "question" || status === "fail";
+                      return (
+                        <View
+                          key={item.id}
+                          className={`review-issue-item ${selected ? "review-issue-item--selected" : ""}`}
+                          onClick={() => toggleReviewIssue(item.id)}
+                        >
+                          <Text className="review-issue-check">{selected ? "✓" : ""}</Text>
+                          <View className="review-issue-content">
+                            <Text className={`review-kind review-kind--${item.kind}`}>
+                              {reviewKindLabels[item.kind]}
+                            </Text>
+                            <Text className="review-issue-item-title">{item.title}</Text>
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </View>
+                )}
                 <Button
                   className="review-apply-button"
-                  disabled={!image || selectedReviewIssues.length === 0}
-                  onClick={applySelectedReviewIssues}
+                  disabled={busy || !canGenerateReviewRevision}
+                  onClick={generateReviewRevision}
                 >
-                  {!image
-                    ? "重新上传原图后可继续修改"
-                    : selectedReviewIssues.length === 0
-                      ? "请先勾选问题"
-                      : `将 ${selectedReviewIssues.length} 个问题填入修改要求`}
+                  {refining
+                    ? "正在处理修改任务…"
+                    : !canGenerateReviewRevision
+                      ? "请填写要求或勾选问题"
+                      : "生成修改后的下一版"}
                 </Button>
+                <Text className="review-cost-note">
+                  填写和勾选不会调用模型；点击生成后使用 1 次生图额度，预计 10–30 秒。
+                  {!image ? " 小程序会优先复用云端原图，过期时再提示重新上传。" : ""}
+                </Text>
                 <View className="review-resolution-actions">
                   <View
                     className="review-secondary-link"
@@ -1091,14 +1149,8 @@ export default function Index() {
                   })}
                 </View>
                 {selectedReviewIssues.length > 0 && (
-                  <Button
-                    className="review-apply-button"
-                    disabled={!image}
-                    onClick={applySelectedReviewIssues}
-                  >
-                    {!image
-                      ? "重新上传原图后可继续修改"
-                      : `将 ${selectedReviewIssues.length} 个问题填入修改要求`}
+                  <Button className="review-apply-button" onClick={applySelectedReviewIssues}>
+                    {`将 ${selectedReviewIssues.length} 个问题填入修改要求`}
                   </Button>
                 )}
                 <View
@@ -1128,11 +1180,13 @@ export default function Index() {
             </Button>
           </View>
 
-          {image ? (
+          {activeReviewMode !== "issues" && (
             <View id="refinement-panel" className="refinement-panel">
               <Text className="refinement-title">继续修改当前结果</Text>
               <Text className="refinement-copy">
-                系统会从原图重新生成下一版，原始保留项、选中方向和累计修改继续生效。
+                {image
+                  ? "系统会从原图重新生成下一版，原始保留项、选中方向和累计修改继续生效。"
+                  : "小程序会复用父任务在有效期内保存的原图；如果原图已过期，再提示你重新上传。"}
               </Text>
               <Textarea
                 className="refinement-input"
@@ -1141,20 +1195,16 @@ export default function Index() {
                 placeholder="例如：袖型再宽松一点，门襟改为隐藏拉链，其余保持不变"
                 onInput={(event) => setRevisionInstruction(event.detail.value)}
               />
+              <Text className="refinement-cost-note">
+                输入文字不会调用模型；点击下方按钮后使用 1 次生图额度。
+              </Text>
               <Button
                 className="refinement-button"
                 disabled={busy || revisionInstruction.trim().length < 2}
-                onClick={refineCurrentResult}
+                onClick={() => void refineCurrentResult()}
               >
                 {refining ? "正在处理修改任务…" : "生成修改后的下一版"}
               </Button>
-            </View>
-          ) : (
-            <View className="refinement-panel">
-              <Text className="refinement-title">已恢复云端结果</Text>
-              <Text className="refinement-copy">
-                当前设备没有保留原图临时文件，你仍可保存结果；如需继续修改，请重新上传原图并重新开始。
-              </Text>
             </View>
           )}
         </View>

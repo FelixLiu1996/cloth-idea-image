@@ -193,6 +193,7 @@ export function createGarmentResultReviewPlan(
 
 export function createGarmentRefinementInstruction(
   reviewItems: readonly GarmentResultReviewItem[],
+  userInstruction = "",
 ): string {
   const issueInstructions = reviewItems.map((item) => {
     if (item.kind === "preservation") {
@@ -203,13 +204,18 @@ export function createGarmentRefinementInstruction(
     }
     return `修正“${item.title}”`;
   });
+  const normalizedUserInstruction = userInstruction.trim().replace(/\s+/g, " ");
 
-  if (issueInstructions.length === 0) {
+  if (issueInstructions.length === 0 && !normalizedUserInstruction) {
     return "";
   }
 
-  return `请修正以下问题：${issueInstructions.join("；")}。其余已确认元素和设计方向保持不变。`.slice(
-    0,
-    500,
-  );
+  const unchangedSuffix = "其余已确认元素和设计方向保持不变。";
+  const body = normalizedUserInstruction
+    ? `用户补充要求：${normalizedUserInstruction}${
+        issueInstructions.length > 0 ? `；同时修正以下问题：${issueInstructions.join("；")}` : ""
+      }`
+    : `请修正以下问题：${issueInstructions.join("；")}`;
+  const maximumBodyLength = 500 - unchangedSuffix.length - 1;
+  return `${body.slice(0, maximumBodyLength)}。${unchangedSuffix}`;
 }

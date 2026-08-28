@@ -21,7 +21,7 @@ export interface CreateGenerationRequest {
 
 export interface RefineGenerationRequest {
   readonly parentJobId: string;
-  readonly imagePath: string;
+  readonly imagePath?: string;
   readonly imageSize?: number;
   readonly instruction: string;
   readonly accessCode?: string;

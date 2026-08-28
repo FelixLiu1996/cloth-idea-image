@@ -123,4 +123,31 @@ describe("garment result review plan", () => {
     expect(instruction).toContain("其余已确认元素和设计方向保持不变");
     expect(createGarmentRefinementInstruction([])).toBe("");
   });
+
+  it("prioritizes free-text feedback and combines it with selected issues without another model", () => {
+    const instruction = createGarmentRefinementInstruction(
+      [
+        {
+          id: "anomaly-structure-quality",
+          kind: "anomaly",
+          title: "结构与图像质量",
+          instruction: "确认结构和画质。",
+        },
+      ],
+      "  胸前只保留一个斜插袋，袖口格纹不变  ",
+    );
+
+    expect(instruction).toContain("用户补充要求：胸前只保留一个斜插袋，袖口格纹不变");
+    expect(instruction).toContain("同时修正以下问题：修正“结构与图像质量”");
+    expect(instruction).toContain("其余已确认元素和设计方向保持不变");
+  });
+
+  it("accepts free text without checklist items and keeps the compiled instruction bounded", () => {
+    const instruction = createGarmentRefinementInstruction([], "袖型更宽松一点");
+    const longInstruction = createGarmentRefinementInstruction([], "调整结构".repeat(200));
+
+    expect(instruction).toBe("用户补充要求：袖型更宽松一点。其余已确认元素和设计方向保持不变。");
+    expect(longInstruction.length).toBe(500);
+    expect(longInstruction.endsWith("其余已确认元素和设计方向保持不变。")).toBe(true);
+  });
 });

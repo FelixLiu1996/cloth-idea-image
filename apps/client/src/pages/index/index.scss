@@ -1134,6 +1134,45 @@ $line: #dedbd2;
   line-height: 1.4;
 }
 
+.review-feedback-input {
+  width: 100%;
+  height: 132px;
+  margin-top: 14px;
+  padding: 16px;
+  border: 2px solid rgba(216, 109, 53, 0.32);
+  border-radius: 13px;
+  background: #fff;
+  color: $ink;
+  font-size: 18px;
+  line-height: 1.5;
+  box-sizing: border-box;
+}
+
+.review-checklist-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 17px;
+  padding: 12px 2px 4px;
+}
+
+.review-checklist-label,
+.review-checklist-state {
+  display: block;
+}
+
+.review-checklist-label {
+  color: $ink;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.review-checklist-state {
+  color: $accent;
+  font-size: 15px;
+  font-weight: 700;
+}
+
 .review-apply-button {
   display: flex;
   height: 66px;
@@ -1151,6 +1190,16 @@ $line: #dedbd2;
 .review-apply-button[disabled] {
   background: #d2cfc6;
   color: #f4f2ed;
+}
+
+.review-cost-note,
+.refinement-cost-note {
+  display: block;
+  margin-top: 10px;
+  color: $muted;
+  font-size: 15px;
+  line-height: 1.5;
+  text-align: center;
 }
 
 .review-detail-note {
@@ -1351,6 +1400,10 @@ $line: #dedbd2;
   box-sizing: border-box;
 }
 
+.refinement-cost-note {
+  text-align: left;
+}
+
 .refinement-button {
   display: flex;
   height: 84px;
@@ -1477,6 +1530,7 @@ $line: #dedbd2;
   .review-kind,
   .review-current-status,
   .review-issue-count,
+  .review-checklist-state,
   .result-review-progress,
   .history-operation {
     font-size: 24px;
@@ -1496,6 +1550,7 @@ $line: #dedbd2;
   .review-resolution-copy,
   .review-issue-copy,
   .review-detail-note,
+  .review-cost-note,
   .result-review-instruction,
   .review-status-action,
   .history-count,
@@ -1529,6 +1584,8 @@ $line: #dedbd2;
   .review-quick-action-title,
   .review-resolution-title,
   .review-issue-title,
+  .review-feedback-input,
+  .review-checklist-label,
   .review-apply-button,
   .result-action,
   .refinement-input,
@@ -1554,6 +1611,10 @@ $line: #dedbd2;
 
   .refinement-copy {
     font-size: 28px;
+  }
+
+  .refinement-cost-note {
+    font-size: 26px;
   }
 
   .review-issue-check {

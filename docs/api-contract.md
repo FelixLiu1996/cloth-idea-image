@@ -155,6 +155,8 @@
 
 校验通过后首次返回 HTTP `202` 的任务摘要，客户端通过同一个 `GET /api/v1/generations/:jobId` 查询。成功终态为 `GenerationApiResponse`，其中 `operation` 为 `refine`，`parentJobId` 指向用户继续修改时看到的上一版，`revisionInstruction` 为本轮指令。父记录不存在时返回 `PARENT_GENERATION_NOT_FOUND`；父图片已经清理时返回 `PARENT_ASSET_EXPIRED`；上传图与分支原图不一致时返回 `REFINEMENT_IMAGE_MISMATCH`。
 
+微信云内部 `create-refinement` 协议与上述 Fastify HTTP 表单共享相同业务语义，但允许不再上传 `sourceImage`：客户端仍必须发送新的幂等键、`parentJobId` 和2至500字的 `instruction`，云函数从所属用户的父任务执行输入中恢复原始云文件引用并再次校验 Provider、文件路径、大小和 SHA-256。客户端显式上传图片时仍走同样的哈希一致性校验。父任务或受控原图不可用时在任务准入和额度预占前返回稳定错误；该能力不改变 H5/Fastify 必须重新上传原图的约束。
+
 ## 读取结果图
 
 `GET /api/v1/assets/:jobId/:fileName`

@@ -489,7 +489,9 @@ export class WechatCloudGarmentGateway implements GarmentGateway {
   }
 
   async refineGeneration(input: RefineGenerationRequest): Promise<GenerationApiResponse> {
-    const image = await this.uploadSource(input.imagePath, imageSize(input));
+    const image = input.imagePath
+      ? await this.uploadSource(input.imagePath, imageSize(input))
+      : { idempotencyKey: createWechatCloudIdempotencyKey() };
     const submitted = parseGenerationJob(
       await this.callWithRetry({
         action: "create-refinement",

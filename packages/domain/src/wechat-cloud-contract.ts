@@ -74,10 +74,15 @@ export interface CreateWechatCloudGenerationRequest extends WechatCloudSourceIma
   readonly parentJobId?: string;
 }
 
-export interface CreateWechatCloudRefinementRequest extends WechatCloudSourceImageReference {
+export interface CreateWechatCloudRefinementRequest {
   readonly action: "create-refinement";
+  readonly idempotencyKey: string;
   readonly parentJobId: string;
   readonly instruction: string;
+  readonly cloudFileId?: string;
+  readonly fileName?: string;
+  readonly mimeType?: SupportedImageMimeType;
+  readonly size?: number;
 }
 
 export interface GetWechatCloudGenerationJobRequest {

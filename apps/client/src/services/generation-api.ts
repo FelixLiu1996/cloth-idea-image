@@ -212,6 +212,13 @@ export async function createGeneration(
 export async function refineGeneration(
   input: RefineGenerationRequest,
 ): Promise<GenerationApiResponse> {
+  if (!input.imagePath) {
+    throw new GenerationApiError(
+      "本地 H5 继续修改需要重新选择最初商品图。",
+      "REFINEMENT_SOURCE_REQUIRED",
+      false,
+    );
+  }
   const submitted = await uploadMultipart<GenerationJobStatusResponse>({
     path: `/api/v1/generations/${input.parentJobId}/refinements`,
     imagePath: input.imagePath,

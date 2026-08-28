@@ -444,11 +444,9 @@ describe("garment cloud business handler", () => {
       harness.handler({ action: "get-generation-job", jobId: submitted.data.jobId }),
     ).resolves.toMatchObject({ ok: true, data: { status: "succeeded" } });
 
-    const refinementSource = source("refinement-key-1");
-    harness.storage.files.set(refinementSource.cloudFileId, Uint8Array.from([1, 2, 3]));
     const refined = await harness.handler({
       action: "create-refinement",
-      ...refinementSource,
+      idempotencyKey: "refinement-key-1",
       parentJobId: submitted.data.jobId,
       instruction: "袖型再宽松一点",
     });
@@ -467,6 +465,42 @@ describe("garment cloud business handler", () => {
         revisionInstruction: "袖型再宽松一点",
       },
     });
+    const refinementTask = await harness.tasks.findById(ownerId, refined.data.jobId, now);
+    expect(refinementTask?.executionPayload).toMatchObject({
+      source: generationSource,
+      context: { revisionInstructions: ["袖型再宽松一点"] },
+    });
+  });
+
+  it("returns a stable error without charging when the reusable parent source expired", async () => {
+    const harness = createHarness();
+    const generationSource = source("generation-key-expired");
+    harness.storage.files.set(generationSource.cloudFileId, Uint8Array.from([1, 2, 3]));
+    const submitted = await harness.handler({
+      action: "create-generation",
+      ...generationSource,
+      brief,
+    });
+    if (!submitted.ok || !("jobId" in submitted.data)) {
+      throw new Error("expected generation submission to succeed");
+    }
+    await harness.handler({ action: "get-generation-job", jobId: submitted.data.jobId });
+    harness.storage.files.delete(generationSource.cloudFileId);
+
+    await expect(
+      harness.handler({
+        action: "create-refinement",
+        idempotencyKey: "refinement-key-expired",
+        parentJobId: submitted.data.jobId,
+        instruction: "袖口再收窄一点",
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "PARENT_ASSET_EXPIRED", retryable: false },
+    });
+    await expect(
+      harness.quotas.getUsage("user", ownerId, "generation", "2026-08-27"),
+    ).resolves.toBe(1);
   });
 
   it("serializes concurrent idempotent submissions and poll-driven execution", async () => {
