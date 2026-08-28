@@ -27,3 +27,4 @@ ADR 的状态表示决策状态，不是功能完成状态。`Accepted` 只代�
 - [0005：采用证据门控的服装分析与确定性提示词编译](0005-use-evidence-gated-garment-analysis.md)
 - [0006：使用可轮询的异步生图任务](0006-use-pollable-generation-jobs.md)
 - [0007：先交付单进程受控试用版](0007-use-single-process-controlled-trial.md)
+- [0008：使用独立云开发环境交付小程序体验版](0008-use-wechat-cloudbase-experience-trial.md)

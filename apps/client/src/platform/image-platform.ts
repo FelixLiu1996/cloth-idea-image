@@ -28,7 +28,43 @@ export async function selectGarmentImage(): Promise<SelectedImage | null> {
   }
 }
 
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === "object" && error !== null && "errMsg" in error) {
+    const value = (error as { readonly errMsg?: unknown }).errMsg;
+    return typeof value === "string" ? value : "";
+  }
+  return String(error);
+}
+
+async function saveToAlbum(filePath: string): Promise<void> {
+  try {
+    await Taro.saveImageToPhotosAlbum({ filePath });
+  } catch (error) {
+    const message = errorMessage(error).toLowerCase();
+    if (message.includes("auth") || message.includes("deny") || message.includes("permission")) {
+      throw new Error("没有相册保存权限，请在小程序设置中允许保存到相册。");
+    }
+    throw new Error("结果图片保存失败，请稍后重试。");
+  }
+}
+
 export async function saveGeneratedImage(imageUrl: string): Promise<void> {
+  if (imageUrl.startsWith("cloud://")) {
+    let downloaded: { readonly tempFilePath?: string };
+    try {
+      downloaded = await Taro.cloud.downloadFile({ fileID: imageUrl });
+    } catch {
+      throw new Error("云端结果图片下载失败，请稍后重试。");
+    }
+    if (!downloaded.tempFilePath) {
+      throw new Error("云端结果图片下载失败，请稍后重试。");
+    }
+    await saveToAlbum(downloaded.tempFilePath);
+    return;
+  }
   const downloaded = await Taro.downloadFile({
     url: imageUrl,
     withCredentials: false,
@@ -38,5 +74,5 @@ export async function saveGeneratedImage(imageUrl: string): Promise<void> {
     throw new Error("结果图片下载失败，请稍后重试。");
   }
 
-  await Taro.saveImageToPhotosAlbum({ filePath: downloaded.tempFilePath });
+  await saveToAlbum(downloaded.tempFilePath);
 }

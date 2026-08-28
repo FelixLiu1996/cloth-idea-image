@@ -56,7 +56,7 @@ export interface ProviderUsage {
 }
 
 export interface GarmentGenerationResult {
-  readonly provider: "alibaba-wan" | "alibaba-qwen-image" | "volcengine-seedream";
+  readonly provider: "alibaba-wan" | "alibaba-qwen-image" | "volcengine-seedream" | "testing-fake";
   readonly model: string;
   readonly providerRequestId: string | null;
   readonly durationMs: number;

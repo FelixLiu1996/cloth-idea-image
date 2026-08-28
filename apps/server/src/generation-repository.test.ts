@@ -41,6 +41,7 @@ function jobInput(
 ): EnqueueGenerationJobInput {
   return {
     jobId: result.jobId,
+    action: "generation",
     statusUrl: `http://example.test/api/v1/generations/${result.jobId}`,
     createdAt: result.createdAt,
     idempotencyKey: "same-key",
@@ -66,25 +67,24 @@ describe("GenerationResultRepository", () => {
       await gate;
       return record;
     });
-    const onAccepted = vi.fn();
     const repository = new GenerationResultRepository();
 
-    const first = repository.enqueueOnce(jobInput(operation, { onAccepted }));
-    const second = repository.enqueueOnce(
+    const first = await repository.enqueueOnce(jobInput(operation));
+    const second = await repository.enqueueOnce(
       jobInput(operation, {
         jobId: "00000000-0000-0000-0000-000000000002",
-        onAccepted,
       }),
     );
 
     expect(first).toMatchObject({ reused: false, job: { status: "queued", jobId: result.jobId } });
     expect(second).toMatchObject({ reused: true, job: { jobId: result.jobId } });
-    expect(onAccepted).toHaveBeenCalledTimes(1);
     await vi.waitFor(() => expect(operation).toHaveBeenCalledTimes(1));
-    expect(repository.getJob(result.jobId)?.status).toBe("generating");
+    expect((await repository.getJob(result.jobId))?.status).toBe("generating");
 
     release();
-    await vi.waitFor(() => expect(repository.getJob(result.jobId)?.status).toBe("succeeded"));
+    await vi.waitFor(async () =>
+      expect((await repository.getJob(result.jobId))?.status).toBe("succeeded"),
+    );
     expect(repository.get(result.jobId)?.response).toEqual(result);
   });
 
@@ -95,10 +95,12 @@ describe("GenerationResultRepository", () => {
     });
     const retryOperation = vi.fn(async () => record);
 
-    repository.enqueueOnce(jobInput(failedOperation));
-    await vi.waitFor(() => expect(repository.getJob(result.jobId)?.status).toBe("failed"));
+    await repository.enqueueOnce(jobInput(failedOperation));
+    await vi.waitFor(async () =>
+      expect((await repository.getJob(result.jobId))?.status).toBe("failed"),
+    );
 
-    const repeated = repository.enqueueOnce(jobInput(retryOperation));
+    const repeated = await repository.enqueueOnce(jobInput(retryOperation));
     expect(repeated).toMatchObject({
       reused: true,
       job: { status: "failed", jobId: result.jobId },
@@ -106,41 +108,44 @@ describe("GenerationResultRepository", () => {
     expect(retryOperation).not.toHaveBeenCalled();
   });
 
-  it("rejects reuse of an idempotency key for a different request", () => {
+  it("rejects reuse of an idempotency key for a different request", async () => {
     const repository = new GenerationResultRepository();
-    repository.enqueueOnce(jobInput(async () => record));
+    await repository.enqueueOnce(jobInput(async () => record));
 
-    expect(() =>
+    await expect(
       repository.enqueueOnce(
         jobInput(async () => record, {
           jobId: "00000000-0000-0000-0000-000000000002",
           requestFingerprint: "request-two",
         }),
       ),
-    ).toThrow("同一个幂等键不能用于不同的生成请求");
+    ).rejects.toThrow("同一个幂等键不能用于不同的请求");
   });
 
-  it("does not create a job when the admission policy rejects it", () => {
-    const repository = new GenerationResultRepository();
+  it("does not create a job when the shared quota admission rejects it", async () => {
+    const repository = new GenerationResultRepository({ dailyGenerationLimit: 1 });
+    await repository.enqueueOnce(jobInput(async () => record));
+    const rejectedJobId = "00000000-0000-0000-0000-000000000002";
 
-    expect(() =>
+    await expect(
       repository.enqueueOnce(
         jobInput(async () => record, {
-          onAccepted: () => {
-            throw new Error("daily quota reached");
-          },
+          jobId: rejectedJobId,
+          idempotencyKey: "second-key",
+          requestFingerprint: "second-request",
         }),
       ),
-    ).toThrow("daily quota reached");
-    expect(repository.getJob(result.jobId)).toBeNull();
+    ).rejects.toThrow("今日生图额度已用完");
+    await expect(repository.getJob(rejectedJobId)).resolves.toBeNull();
   });
 
-  it("stores successful generation records for later refinement", () => {
+  it("stores successful generation records for later refinement", async () => {
     const repository = new GenerationResultRepository();
-    repository.save(record);
+    await repository.enqueueOnce(jobInput(async () => record, { idempotencyKey: undefined }));
+    await vi.waitFor(() => expect(repository.get(result.jobId)?.response).toEqual(result));
 
     expect(repository.get(result.jobId)?.response).toEqual(result);
-    expect(repository.getJob(result.jobId)).toEqual(result);
+    await expect(repository.getJob(result.jobId)).resolves.toEqual(result);
     expect(repository.get("00000000-0000-0000-0000-000000000999")).toBeNull();
   });
 });

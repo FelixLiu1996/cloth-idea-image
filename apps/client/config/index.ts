@@ -27,6 +27,10 @@ const createConfig: UserConfigFn<"vite"> = async (merge) => {
     },
     defineConstants: {
       API_BASE_URL: JSON.stringify(process.env.TARO_APP_API_BASE_URL ?? "http://127.0.0.1:3000"),
+      GARMENT_GATEWAY_MODE: JSON.stringify(process.env.TARO_APP_GARMENT_GATEWAY_MODE ?? "http"),
+      WECHAT_CLOUD_ENV_ID: JSON.stringify(
+        process.env.TARO_APP_WECHAT_CLOUD_ENV_ID ?? "cloud1-d1g87yl4k4cdf212b",
+      ),
     },
     copy: {
       patterns: [],

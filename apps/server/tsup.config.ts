@@ -8,5 +8,5 @@ export default defineConfig({
   dts: true,
   sourcemap: true,
   clean: true,
-  noExternal: ["@cloth-idea/domain", "@cloth-idea/model-providers"],
+  noExternal: ["@cloth-idea/application", "@cloth-idea/domain", "@cloth-idea/model-providers"],
 });

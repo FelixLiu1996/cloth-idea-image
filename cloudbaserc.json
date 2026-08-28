@@ -1,0 +1,32 @@
+{
+  "envId": "cloud1-d1g87yl4k4cdf212b",
+  "functionRoot": "./apps/client/cloudfunctions",
+  "functions": [
+    {
+      "name": "garment-api",
+      "handler": "index.main",
+      "runtime": "Nodejs20.19",
+      "timeout": 180,
+      "memorySize": 256,
+      "installDependency": true,
+      "triggers": [
+        {
+          "name": "garment-expired-data-cleanup",
+          "type": "timer",
+          "config": "0 20 4 * * * *"
+        }
+      ],
+      "envVariables": {
+        "WECHAT_CLOUD_BUSINESS_PROVIDER": "fake",
+        "TRIAL_DAILY_ANALYSIS_LIMIT": "5",
+        "TRIAL_DAILY_GENERATION_LIMIT": "10",
+        "TRIAL_GLOBAL_DAILY_ANALYSIS_LIMIT": "100",
+        "TRIAL_GLOBAL_DAILY_GENERATION_LIMIT": "200",
+        "ASSET_RETENTION_HOURS": "72",
+        "FAKE_GENERATION_DELAY_MS": "15000",
+        "GENERATION_EXECUTION_LEASE_SECONDS": "210",
+        "MAX_REFINEMENT_DEPTH": "3"
+      }
+    }
+  ]
+}

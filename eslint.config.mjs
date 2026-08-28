@@ -13,6 +13,7 @@ export default tseslint.config(
       "outputs/**",
       "uploads/**",
       "var/**",
+      "apps/client/cloudfunctions/**",
     ],
   },
   js.configs.recommended,

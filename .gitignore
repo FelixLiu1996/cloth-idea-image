@@ -19,6 +19,7 @@ var/
 
 # WeChat developer tool local settings
 project.private.config.json
+/apps/client/cloudfunctions/
 
 # Logs and operating-system files
 *.log

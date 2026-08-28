@@ -1,6 +1,8 @@
 /// <reference types="@tarojs/taro" />
 
 declare const API_BASE_URL: string;
+declare const GARMENT_GATEWAY_MODE: string;
+declare const WECHAT_CLOUD_ENV_ID: string;
 
 declare module "*.png";
 declare module "*.gif";

@@ -71,6 +71,22 @@ $line: #dedbd2;
   line-height: 1.6;
 }
 
+.cloud-diagnostics-entry {
+  width: fit-content;
+  margin: 24px 0 0;
+  padding: 0 28px;
+  border: 1px solid rgba(41, 61, 47, 0.22);
+  border-radius: 999px;
+  background: rgba(255, 253, 248, 0.86);
+  color: $moss;
+  font-size: 22px;
+  line-height: 64px;
+}
+
+.cloud-diagnostics-entry::after {
+  border: 0;
+}
+
 .access-card {
   margin-bottom: 28px;
   padding: 26px 30px;
@@ -531,6 +547,10 @@ $line: #dedbd2;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
   padding: 0 24px 24px;
+}
+
+.comparison-grid--single {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .comparison-item {

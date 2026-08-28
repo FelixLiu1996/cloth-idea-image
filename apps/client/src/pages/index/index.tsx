@@ -14,13 +14,8 @@ import {
   type SelectedImage,
 } from "../../platform/image-platform";
 import { readTrialAccessCode, saveTrialAccessCode } from "../../platform/trial-access-platform";
-import {
-  analyzeGarment,
-  createGeneration,
-  getTrialCapabilities,
-  refineGeneration,
-  type CreateGenerationRequest,
-} from "../../services/generation-api";
+import { garmentGateway } from "../../services/active-garment-gateway";
+import type { CreateGenerationRequest } from "../../services/garment-gateway";
 import "./index.scss";
 
 const modes: readonly {
@@ -98,11 +93,32 @@ export default function Index() {
 
   useEffect(() => {
     let active = true;
-    void getTrialCapabilities()
+    void garmentGateway
+      .getTrialCapabilities()
       .then((capabilities) => {
         if (active) {
           setTrialAccessRequired(capabilities.trialAccessRequired);
         }
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void garmentGateway
+      .restorePendingGeneration()
+      .then((restored) => {
+        if (!active || !restored) {
+          return;
+        }
+        setResults((current) =>
+          current.some((item) => item.jobId === restored.jobId) ? current : [...current, restored],
+        );
+        setActiveJobId(restored.jobId);
+        setSelectedDirectionId(restored.directionId);
       })
       .catch(() => undefined);
     return () => {
@@ -157,6 +173,7 @@ export default function Index() {
     }
     return {
       imagePath: image.path,
+      imageSize: image.size,
       mode,
       preserveItems,
       changeRequest,
@@ -196,7 +213,7 @@ export default function Index() {
     setActiveJobId(null);
     setRevisionInstruction("");
     try {
-      const nextAnalysis = await analyzeGarment(input);
+      const nextAnalysis = await garmentGateway.analyzeGarment(input);
       setAnalysisResult(nextAnalysis);
       setSelectedDirectionId(nextAnalysis.analysis.recommendedDirectionId);
     } catch (error) {
@@ -226,7 +243,7 @@ export default function Index() {
             ? latestMatchingResult(results, "analyzed", selectedDirectionId)
             : latestMatchingResult(results, "direct", null)
           : parentOverride;
-      const nextResult = await createGeneration({
+      const nextResult = await garmentGateway.createGeneration({
         ...input,
         ...(useAnalysis && analysisResult && selectedDirectionId
           ? { analysisId: analysisResult.analysisId, directionId: selectedDirectionId }
@@ -257,9 +274,10 @@ export default function Index() {
     setRefining(true);
     setErrorMessage("");
     try {
-      const nextResult = await refineGeneration({
+      const nextResult = await garmentGateway.refineGeneration({
         parentJobId: activeResult.jobId,
         imagePath: image.path,
+        imageSize: image.size,
         instruction,
         ...(trialAccessCode.trim() ? { accessCode: trialAccessCode.trim() } : {}),
       });
@@ -304,6 +322,14 @@ export default function Index() {
         <Text className="hero-copy">
           先识别可信的原款结构，再选择设计方向，最后生成一张效果图。
         </Text>
+        {process.env.TARO_ENV === "weapp" && (
+          <Button
+            className="cloud-diagnostics-entry"
+            onClick={() => Taro.navigateTo({ url: "/pages/cloud-diagnostics/index" })}
+          >
+            云开发诊断
+          </Button>
+        )}
       </View>
 
       {trialAccessRequired && (
@@ -537,7 +563,7 @@ export default function Index() {
         </View>
       )}
 
-      {activeResult && image && (
+      {activeResult && (
         <View className="result-section">
           <View className="result-heading">
             <Text className="result-kicker">DESIGN READY</Text>
@@ -545,21 +571,25 @@ export default function Index() {
             <Text className="result-summary">{activeResult.summary}</Text>
           </View>
 
-          <View className="comparison-grid">
-            <View className="comparison-item">
-              <Text className="comparison-label">
-                {activeResult.operation === "refine" && parentResult ? "上一版" : "原图"}
-              </Text>
-              <Image
-                className="comparison-image"
-                src={
-                  activeResult.operation === "refine" && parentResult
-                    ? parentResult.resultUrl
-                    : image.path
-                }
-                mode="aspectFit"
-              />
-            </View>
+          <View
+            className={`comparison-grid ${!image && !parentResult ? "comparison-grid--single" : ""}`}
+          >
+            {(image || parentResult) && (
+              <View className="comparison-item">
+                <Text className="comparison-label">
+                  {activeResult.operation === "refine" && parentResult ? "上一版" : "原图"}
+                </Text>
+                <Image
+                  className="comparison-image"
+                  src={
+                    activeResult.operation === "refine" && parentResult
+                      ? parentResult.resultUrl
+                      : image!.path
+                  }
+                  mode="aspectFit"
+                />
+              </View>
+            )}
             <View className="comparison-item">
               <Text className="comparison-label comparison-label--current">当前结果</Text>
               <Image className="comparison-image" src={activeResult.resultUrl} mode="aspectFit" />
@@ -577,36 +607,49 @@ export default function Index() {
           <View className="result-actions">
             <Button
               className="result-action result-action--primary"
-              disabled={busy}
+              disabled={busy || !image || (activeResult.strategy === "analyzed" && !analysisResult)}
               onClick={() => generate(activeResult.strategy === "analyzed", activeResult)}
             >
-              {generating ? "正在处理生成任务…" : "按此方向再生成"}
+              {generating
+                ? "正在处理生成任务…"
+                : !image || (activeResult.strategy === "analyzed" && !analysisResult)
+                  ? "重新开始后可再生成"
+                  : "按此方向再生成"}
             </Button>
             <Button className="result-action" disabled={saving} onClick={downloadCurrentResult}>
               {saving ? "正在保存…" : "下载结果图"}
             </Button>
           </View>
 
-          <View className="refinement-panel">
-            <Text className="refinement-title">继续修改当前结果</Text>
-            <Text className="refinement-copy">
-              系统会从原图重新生成下一版，原始保留项、选中方向和累计修改继续生效。
-            </Text>
-            <Textarea
-              className="refinement-input"
-              value={revisionInstruction}
-              maxlength={500}
-              placeholder="例如：袖型再宽松一点，门襟改为隐藏拉链，其余保持不变"
-              onInput={(event) => setRevisionInstruction(event.detail.value)}
-            />
-            <Button
-              className="refinement-button"
-              disabled={busy || revisionInstruction.trim().length < 2}
-              onClick={refineCurrentResult}
-            >
-              {refining ? "正在处理修改任务…" : "生成修改后的下一版"}
-            </Button>
-          </View>
+          {image ? (
+            <View className="refinement-panel">
+              <Text className="refinement-title">继续修改当前结果</Text>
+              <Text className="refinement-copy">
+                系统会从原图重新生成下一版，原始保留项、选中方向和累计修改继续生效。
+              </Text>
+              <Textarea
+                className="refinement-input"
+                value={revisionInstruction}
+                maxlength={500}
+                placeholder="例如：袖型再宽松一点，门襟改为隐藏拉链，其余保持不变"
+                onInput={(event) => setRevisionInstruction(event.detail.value)}
+              />
+              <Button
+                className="refinement-button"
+                disabled={busy || revisionInstruction.trim().length < 2}
+                onClick={refineCurrentResult}
+              >
+                {refining ? "正在处理修改任务…" : "生成修改后的下一版"}
+              </Button>
+            </View>
+          ) : (
+            <View className="refinement-panel">
+              <Text className="refinement-title">已恢复云端结果</Text>
+              <Text className="refinement-copy">
+                当前设备没有保留原图临时文件，你仍可保存结果；如需继续修改，请重新上传原图并重新开始。
+              </Text>
+            </View>
+          )}
         </View>
       )}
 
