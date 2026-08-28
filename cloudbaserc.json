@@ -18,6 +18,8 @@
       ],
       "envVariables": {
         "WECHAT_CLOUD_BUSINESS_PROVIDER": "fake",
+        "WECHAT_CLOUD_TRIAL_ACCESS_MODE": "fingerprint-allowlist",
+        "WECHAT_CLOUD_EXPERIENCE_ACCESS_UNTIL": "",
         "TRIAL_DAILY_ANALYSIS_LIMIT": "5",
         "TRIAL_DAILY_GENERATION_LIMIT": "10",
         "TRIAL_GLOBAL_DAILY_ANALYSIS_LIMIT": "100",
