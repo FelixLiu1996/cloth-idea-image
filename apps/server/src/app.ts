@@ -11,6 +11,7 @@ import {
   designIntensities,
   findDesignDirection,
   generationModes,
+  parsePreserveItems,
   supportedImageMimeTypes,
   type ApiErrorResponse,
   type GarmentAnalysisBrief,
@@ -43,13 +44,7 @@ const generationFieldsSchema = z.object({
   preserveItems: z
     .string()
     .max(500)
-    .transform((value) =>
-      value
-        .split(/[，,、\n]/)
-        .map((item) => item.trim())
-        .filter(Boolean)
-        .slice(0, 12),
-    ),
+    .transform((value) => parsePreserveItems(value)),
   changeRequest: z.string().trim().min(2, "请填写改款要求。").max(1_000),
   styleDirection: z.string().trim().min(2, "请填写目标风格。").max(500),
   intensity: z.enum(designIntensities),

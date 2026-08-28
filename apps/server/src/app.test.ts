@@ -139,12 +139,13 @@ async function createMultipartRequest(
     directionId?: string;
     parentJobId?: string;
     idempotencyKey?: string;
+    preserveItems?: string;
     trialAccessCode?: string;
   } = {},
 ) {
   const form = new FormData();
   form.append("mode", "quick-derivative");
-  form.append("preserveItems", "黑白格纹袖口, 深蓝牛仔面料");
+  form.append("preserveItems", options.preserveItems ?? "黑白格纹袖口, 深蓝牛仔面料");
   form.append("changeRequest", "改成复古工装短夹克并重做整体结构");
   form.append("styleDirection", "九十年代日系复古工装");
   form.append("intensity", "medium");
@@ -489,12 +490,15 @@ describe("generation API", () => {
       );
       expect(context.analyzer.analyze).toHaveBeenCalledTimes(1);
 
+      const confirmedPreserveItems = "黑白格纹袖口, 深蓝牛仔面料, 门襟：中央金属拉链";
+
       const generationResponse = await context.app.inject({
         method: "POST",
         url: "/api/v1/generations",
         ...(await createMultipartRequest({
           analysisId: analyzed.analysisId,
           directionId: "direction-1",
+          preserveItems: confirmedPreserveItems,
         })),
       });
 
@@ -511,6 +515,7 @@ describe("generation API", () => {
       const providerInput = context.provider.generateVariation.mock.calls[0]?.[0];
       expect(providerInput?.prompt).toContain("只设置一个左侧立体袋");
       expect(providerInput?.prompt).toContain("口袋不得左右对称");
+      expect(providerInput?.prompt).toContain("门襟：中央金属拉链");
       expect(providerInput?.prompt).not.toContain("腰上两厘米");
       expect(providerInput?.prompt).not.toContain("- 口袋：左右对称贴袋");
       expect(providerInput?.prompt).not.toContain("- 面料：深蓝牛仔");
@@ -523,6 +528,7 @@ describe("generation API", () => {
           directionId: "direction-1",
           parentJobId: generated.jobId,
           idempotencyKey: "regenerate-request",
+          preserveItems: confirmedPreserveItems,
         })),
       });
       expect(regeneratedResponse.statusCode).toBe(202);

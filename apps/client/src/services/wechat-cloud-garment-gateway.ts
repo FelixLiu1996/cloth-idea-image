@@ -3,6 +3,7 @@ import {
   type GarmentAnalysisBrief,
   type GenerationApiResponse,
   type GenerationJobStatusResponse,
+  parsePreserveItems,
   type WechatCloudBusinessRequest,
   type WechatCloudCapabilities,
   type WechatCloudSourceImageReference,
@@ -281,11 +282,7 @@ function parseGenerationJob(value: unknown): GenerationJobStatusResponse {
 function createBrief(input: CreateGenerationRequest): GarmentAnalysisBrief {
   return {
     mode: input.mode,
-    preserveItems: input.preserveItems
-      .split(/[,，\n]/)
-      .map((item) => item.trim())
-      .filter(Boolean)
-      .slice(0, 16),
+    preserveItems: parsePreserveItems(input.preserveItems),
     changeRequest: input.changeRequest,
     styleDirection: input.styleDirection,
     intensity: input.intensity,

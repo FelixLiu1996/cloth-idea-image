@@ -106,7 +106,7 @@ function input() {
     imagePath: "/tmp/source.png",
     imageSize: 120,
     mode: "quick-derivative" as const,
-    preserveItems: "格纹袖口，深色面料",
+    preserveItems: "格纹袖口、深色面料",
     changeRequest: "调整为短夹克",
     styleDirection: "复古工装",
     intensity: "medium" as const,
@@ -326,6 +326,13 @@ describe("WeChat cloud garment gateway", () => {
       }),
     ).resolves.toEqual(result);
     expect(pending.value).toBe(result.jobId);
+    expect(callFunction).toHaveBeenCalledWith({
+      name: "garment-api",
+      data: expect.objectContaining({
+        action: "create-generation",
+        brief: expect.objectContaining({ preserveItems: ["格纹袖口", "深色面料"] }),
+      }),
+    });
     expect(callFunction).toHaveBeenCalledWith({
       name: "garment-api",
       data: { action: "get-generation-job", jobId: result.jobId },

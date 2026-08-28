@@ -1,8 +1,18 @@
-import type {
-  DesignIntensity,
-  GarmentAnalysisApiResponse,
-  GenerationApiResponse,
-  GenerationMode,
+import {
+  createGarmentResultReviewPlan,
+  createPreserveItemSuggestions,
+  findDesignDirection,
+  garmentChangeAreaLabels,
+  maximumConfirmedPreserveItems,
+  maximumPreserveItemsTextLength,
+  mergePreserveItems,
+  parsePreserveItems,
+  serializePreserveItems,
+  type DesignIntensity,
+  type GarmentAnalysisApiResponse,
+  type GarmentResultReviewStatus,
+  type GenerationApiResponse,
+  type GenerationMode,
 } from "@cloth-idea/domain";
 import { Button, Image, Input, Text, Textarea, View } from "@tarojs/components";
 import Taro from "@tarojs/taro";
@@ -38,10 +48,10 @@ const modes: readonly {
   },
 ];
 
-const intensities: readonly { value: DesignIntensity; label: string }[] = [
-  { value: "low", label: "轻改" },
-  { value: "medium", label: "中改" },
-  { value: "high", label: "大改" },
+const intensities: readonly { value: DesignIntensity; label: string; description: string }[] = [
+  { value: "low", label: "轻改", description: "主体版型基本不变，主要修改细节和工艺。" },
+  { value: "medium", label: "中改", description: "保留识别特征，允许调整结构和比例。" },
+  { value: "high", label: "大改", description: "只强制保留锁定项，允许整体重构。" },
 ];
 
 const riskLabels = {
@@ -55,6 +65,18 @@ const operationLabels = {
   regenerate: "同方向再生成",
   refine: "继续修改",
 } as const;
+
+const reviewKindLabels = {
+  preservation: "保留项",
+  change: "改款项",
+  anomaly: "异常项",
+} as const;
+
+const reviewStatusLabels: Record<Exclude<GarmentResultReviewStatus, "pending">, string> = {
+  pass: "通过",
+  question: "存疑",
+  fail: "未通过",
+};
 
 function latestMatchingResult(
   results: readonly GenerationApiResponse[],
@@ -84,12 +106,18 @@ export default function Index() {
   const [saving, setSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [analysisResult, setAnalysisResult] = useState<GarmentAnalysisApiResponse | null>(null);
+  const [analysisBasePreserveItems, setAnalysisBasePreserveItems] = useState<string[]>([]);
+  const [confirmedPreserveItems, setConfirmedPreserveItems] = useState<string[]>([]);
+  const [customPreserveItem, setCustomPreserveItem] = useState("");
   const [selectedDirectionId, setSelectedDirectionId] = useState<string | null>(null);
   const [results, setResults] = useState<GenerationApiResponse[]>([]);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [revisionInstruction, setRevisionInstruction] = useState("");
   const [trialAccessRequired, setTrialAccessRequired] = useState(false);
   const [trialAccessCode, setTrialAccessCode] = useState(readTrialAccessCode);
+  const [reviewStatuses, setReviewStatuses] = useState<
+    Record<string, Record<string, GarmentResultReviewStatus>>
+  >({});
 
   useEffect(() => {
     let active = true;
@@ -157,13 +185,43 @@ export default function Index() {
     () => latestMatchingResult(results, "direct", null),
     [results],
   );
+  const preserveSuggestions = useMemo(
+    () => (analysisResult ? createPreserveItemSuggestions(analysisResult.analysis) : []),
+    [analysisResult],
+  );
+  const selectedIntensity = intensities.find((item) => item.value === intensity) ?? intensities[1]!;
+  const activeDirection = useMemo(
+    () =>
+      analysisResult && activeResult?.directionId
+        ? findDesignDirection(analysisResult.analysis, activeResult.directionId)
+        : null,
+    [activeResult, analysisResult],
+  );
+  const activeReviewPlan = useMemo(() => {
+    if (!activeResult) {
+      return [];
+    }
+    const preserveForResult =
+      activeResult.strategy === "analyzed"
+        ? confirmedPreserveItems
+        : parsePreserveItems(preserveItems);
+    return createGarmentResultReviewPlan({
+      preserveItems: preserveForResult,
+      direction: activeDirection,
+    });
+  }, [activeDirection, activeResult, confirmedPreserveItems, preserveItems]);
+  const locksFrozen = results.length > 0;
 
   function clearDerivedState() {
     setAnalysisResult(null);
+    setAnalysisBasePreserveItems([]);
+    setConfirmedPreserveItems([]);
+    setCustomPreserveItem("");
     setSelectedDirectionId(null);
     setResults([]);
     setActiveJobId(null);
     setRevisionInstruction("");
+    setReviewStatuses({});
     setErrorMessage("");
   }
 
@@ -175,7 +233,9 @@ export default function Index() {
       imagePath: image.path,
       imageSize: image.size,
       mode,
-      preserveItems,
+      preserveItems: analysisResult
+        ? serializePreserveItems(confirmedPreserveItems)
+        : preserveItems,
       changeRequest,
       styleDirection,
       intensity,
@@ -214,7 +274,11 @@ export default function Index() {
     setRevisionInstruction("");
     try {
       const nextAnalysis = await garmentGateway.analyzeGarment(input);
+      const basePreserveItems = [...parsePreserveItems(input.preserveItems)];
       setAnalysisResult(nextAnalysis);
+      setAnalysisBasePreserveItems(basePreserveItems);
+      setConfirmedPreserveItems(basePreserveItems);
+      setCustomPreserveItem("");
       setSelectedDirectionId(nextAnalysis.analysis.recommendedDirectionId);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "分析失败，请稍后重试。");
@@ -312,6 +376,67 @@ export default function Index() {
     } finally {
       setSaving(false);
     }
+  }
+
+  function trySetConfirmedPreserveItems(items: readonly string[]): boolean {
+    const nextItems = [...mergePreserveItems(items)];
+    if (
+      nextItems.length > maximumConfirmedPreserveItems ||
+      serializePreserveItems(nextItems).length > maximumPreserveItemsTextLength
+    ) {
+      void Taro.showToast({ title: "保留项已达到上限", icon: "none" });
+      return false;
+    }
+    setConfirmedPreserveItems(nextItems);
+    return true;
+  }
+
+  function addConfirmedPreserveItem(item: string): void {
+    if (busy || locksFrozen) {
+      return;
+    }
+    if (
+      !confirmedPreserveItems.includes(item.trim()) &&
+      confirmedPreserveItems.length >= maximumConfirmedPreserveItems
+    ) {
+      void Taro.showToast({ title: "最多锁定 16 项", icon: "none" });
+      return;
+    }
+    trySetConfirmedPreserveItems([...confirmedPreserveItems, item]);
+  }
+
+  function removeConfirmedPreserveItem(item: string): void {
+    if (busy || locksFrozen) {
+      return;
+    }
+    if (analysisBasePreserveItems.includes(item)) {
+      void Taro.showToast({ title: "请在上方修改原始保留项并重新分析", icon: "none" });
+      return;
+    }
+    setConfirmedPreserveItems((current) => current.filter((candidate) => candidate !== item));
+  }
+
+  function addCustomPreserveItem(): void {
+    const item = customPreserveItem.trim();
+    if (!item || busy || locksFrozen) {
+      return;
+    }
+    if (trySetConfirmedPreserveItems([...confirmedPreserveItems, item])) {
+      setCustomPreserveItem("");
+    }
+  }
+
+  function updateReviewStatus(itemId: string, status: GarmentResultReviewStatus): void {
+    if (!activeResult) {
+      return;
+    }
+    setReviewStatuses((current) => ({
+      ...current,
+      [activeResult.jobId]: {
+        ...current[activeResult.jobId],
+        [itemId]: status,
+      },
+    }));
   }
 
   return (
@@ -463,6 +588,7 @@ export default function Index() {
             </View>
           ))}
         </View>
+        <Text className="intensity-description">{selectedIntensity.description}</Text>
       </View>
 
       {errorMessage && <View className="error-card">{errorMessage}</View>}
@@ -497,10 +623,100 @@ export default function Index() {
             </View>
           </View>
 
+          <View className="preserve-confirmation">
+            <View className="preserve-confirmation-heading">
+              <View>
+                <Text className="preserve-confirmation-title">确认本次锁定项</Text>
+                <Text className="preserve-confirmation-copy">
+                  AI 只提供高置信度可见事实作为候选；只有你确认的内容才会成为生图硬约束。
+                </Text>
+              </View>
+              <Text className="preserve-count">
+                {confirmedPreserveItems.length}/{maximumConfirmedPreserveItems}
+              </Text>
+            </View>
+
+            {confirmedPreserveItems.length > 0 ? (
+              <View className="confirmed-preserve-list">
+                {confirmedPreserveItems.map((item) => {
+                  const fromOriginalBrief = analysisBasePreserveItems.includes(item);
+                  return (
+                    <View
+                      key={item}
+                      className={`confirmed-preserve-chip ${fromOriginalBrief ? "confirmed-preserve-chip--original" : ""}`}
+                      onClick={() => removeConfirmedPreserveItem(item)}
+                    >
+                      <Text>{item}</Text>
+                      <Text className="confirmed-preserve-source">
+                        {fromOriginalBrief ? "你填写" : "移除 ×"}
+                      </Text>
+                    </View>
+                  );
+                })}
+              </View>
+            ) : (
+              <Text className="preserve-empty">尚未锁定具体元素，模型只会维持基本品类与主体。</Text>
+            )}
+
+            <Text className="preserve-subtitle">AI 识别的可见事实</Text>
+            <View className="preserve-suggestion-list">
+              {preserveSuggestions
+                .filter((suggestion) => !confirmedPreserveItems.includes(suggestion.preserveItem))
+                .map((suggestion) => (
+                  <View
+                    key={suggestion.id}
+                    className={`preserve-suggestion ${busy || locksFrozen ? "preserve-suggestion--disabled" : ""}`}
+                    onClick={() => addConfirmedPreserveItem(suggestion.preserveItem)}
+                  >
+                    <Text className="preserve-suggestion-label">＋ {suggestion.label}</Text>
+                    <Text className="preserve-suggestion-value">{suggestion.value}</Text>
+                    <Text className="preserve-suggestion-confidence">
+                      可信度 {Math.round(suggestion.confidence * 100)}%
+                    </Text>
+                  </View>
+                ))}
+            </View>
+            {preserveSuggestions.length === 0 ? (
+              <Text className="preserve-empty">没有可直接作为候选的高置信度可见事实。</Text>
+            ) : (
+              preserveSuggestions.every((suggestion) =>
+                confirmedPreserveItems.includes(suggestion.preserveItem),
+              ) && <Text className="preserve-empty">当前可见事实已经全部处理。</Text>
+            )}
+
+            <View className="custom-preserve-row">
+              <Input
+                className="custom-preserve-input"
+                disabled={busy || locksFrozen}
+                value={customPreserveItem}
+                maxlength={100}
+                placeholder="补充一个需要保留的元素"
+                onInput={(event) => setCustomPreserveItem(event.detail.value)}
+                onConfirm={() => addCustomPreserveItem()}
+              />
+              <Button
+                className="custom-preserve-button"
+                disabled={busy || locksFrozen || customPreserveItem.trim().length === 0}
+                onClick={addCustomPreserveItem}
+              >
+                加入
+              </Button>
+            </View>
+            <Text className="preserve-footnote">
+              {locksFrozen
+                ? "本轮已有生成版本，锁定项已冻结；需要调整时请重新分析，避免历史版本与新约束混淆。"
+                : "上方“必须保留”是本次分析的原始硬约束；修改它会重新开始分析。"}
+            </Text>
+          </View>
+
           <View className="direction-list">
             {analysisResult.analysis.designDirections.map((direction) => {
               const selected = selectedDirectionId === direction.id;
               const recommended = analysisResult.analysis.recommendedDirectionId === direction.id;
+              const directionPreserveItems = mergePreserveItems(
+                confirmedPreserveItems,
+                direction.preserve,
+              );
               return (
                 <View
                   key={direction.id}
@@ -517,16 +733,66 @@ export default function Index() {
                 >
                   <View className="direction-heading">
                     <Text className="direction-name">{direction.name}</Text>
-                    {recommended && <Text className="recommended-badge">推荐</Text>}
+                    <View className="direction-badges">
+                      {selected && <Text className="selected-badge">已选择</Text>}
+                      {recommended && <Text className="recommended-badge">推荐</Text>}
+                    </View>
                   </View>
                   <Text className="direction-summary">{direction.summary}</Text>
-                  <View className="change-list">
-                    {direction.changes.map((change) => (
-                      <Text key={`${change.area}-${change.instruction}`} className="change-item">
-                        · {change.instruction}
+                  <View className="direction-area-list">
+                    {[...new Set(direction.changes.map((change) => change.area))].map((area) => (
+                      <Text key={area} className="direction-area-chip">
+                        {garmentChangeAreaLabels[area]}
                       </Text>
                     ))}
                   </View>
+                  {selected ? (
+                    <>
+                      {recommended && (
+                        <Text className="recommendation-reason">
+                          推荐理由：{analysisResult.analysis.recommendationReason}
+                        </Text>
+                      )}
+                      <View className="direction-overview">
+                        <Text className="direction-overview-label">改款幅度</Text>
+                        <Text className="direction-overview-value">{selectedIntensity.label}</Text>
+                        <Text className="direction-overview-copy">
+                          {selectedIntensity.description}
+                        </Text>
+                      </View>
+                      <View className="direction-preserve-block">
+                        <Text className="direction-detail-title">继承的保留项</Text>
+                        <View className="direction-preserve-list">
+                          {directionPreserveItems.map((item) => (
+                            <Text key={item} className="direction-preserve-chip">
+                              {item}
+                            </Text>
+                          ))}
+                        </View>
+                      </View>
+                      <Text className="direction-detail-title direction-detail-title--changes">
+                        主要变化
+                      </Text>
+                      <View className="change-list">
+                        {direction.changes.map((change) => (
+                          <View
+                            key={`${change.area}-${change.instruction}`}
+                            className="change-item"
+                          >
+                            <Text className="change-area">
+                              {garmentChangeAreaLabels[change.area]}
+                            </Text>
+                            <View className="change-content">
+                              <Text className="change-instruction">{change.instruction}</Text>
+                              <Text className="change-reason">{change.reason}</Text>
+                            </View>
+                          </View>
+                        ))}
+                      </View>
+                    </>
+                  ) : (
+                    <Text className="direction-expand-hint">点击查看保留项和完整改款清单</Text>
+                  )}
                   <Text className={`risk-label risk-label--${direction.productionRisk.level}`}>
                     {riskLabels[direction.productionRisk.level]} · {direction.productionRisk.reason}
                   </Text>
@@ -602,6 +868,64 @@ export default function Index() {
               {operationLabels[activeResult.operation]} ·{" "}
               {Math.max(1, Math.round(activeResult.durationMs / 1_000))} 秒
             </Text>
+          </View>
+
+          <View className="result-review-panel">
+            <View className="result-review-heading">
+              <View>
+                <Text className="result-review-title">生成结果核对</Text>
+                <Text className="result-review-copy">
+                  先进行人工确认，不额外调用付费模型；记录仅保留在本次页面中。
+                </Text>
+              </View>
+              <Text className="result-review-progress">
+                {
+                  activeReviewPlan.filter(
+                    (item) =>
+                      (reviewStatuses[activeResult.jobId]?.[item.id] ?? "pending") !== "pending",
+                  ).length
+                }
+                /{activeReviewPlan.length}
+              </Text>
+            </View>
+            <View className="result-review-list">
+              {activeReviewPlan.map((item) => {
+                const status = reviewStatuses[activeResult.jobId]?.[item.id] ?? "pending";
+                return (
+                  <View
+                    key={item.id}
+                    className={`result-review-item result-review-item--${status}`}
+                  >
+                    <View className="result-review-item-heading">
+                      <Text className={`review-kind review-kind--${item.kind}`}>
+                        {reviewKindLabels[item.kind]}
+                      </Text>
+                      <Text className="review-current-status">
+                        {status === "pending" ? "待确认" : reviewStatusLabels[status]}
+                      </Text>
+                    </View>
+                    <Text className="result-review-item-title">{item.title}</Text>
+                    <Text className="result-review-instruction">{item.instruction}</Text>
+                    <View className="review-status-actions">
+                      {(
+                        Object.keys(reviewStatusLabels) as Exclude<
+                          GarmentResultReviewStatus,
+                          "pending"
+                        >[]
+                      ).map((nextStatus) => (
+                        <View
+                          key={nextStatus}
+                          className={`review-status-action review-status-action--${nextStatus} ${status === nextStatus ? "review-status-action--active" : ""}`}
+                          onClick={() => updateReviewStatus(item.id, nextStatus)}
+                        >
+                          {reviewStatusLabels[nextStatus]}
+                        </View>
+                      ))}
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
           </View>
 
           <View className="result-actions">

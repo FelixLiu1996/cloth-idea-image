@@ -242,10 +242,14 @@ describe("garment cloud business handler", () => {
 
     const generationSource = source("real-generation-key-1");
     harness.storage.files.set(generationSource.cloudFileId, Uint8Array.from([1, 2, 3]));
+    const confirmedBrief = {
+      ...brief,
+      preserveItems: [...brief.preserveItems, "门襟：中央金属拉链"],
+    };
     const submitted = await harness.handler({
       action: "create-generation",
       ...generationSource,
-      brief,
+      brief: confirmedBrief,
       analysisId: analysis.data.analysisId,
       directionId: "direction-2",
     });
@@ -265,6 +269,7 @@ describe("garment cloud business handler", () => {
       },
     });
     expect(JSON.stringify(task?.executionPayload)).toContain("禁止出现");
+    expect(JSON.stringify(task?.executionPayload)).toContain("门襟：中央金属拉链");
 
     await expect(
       harness.handler({ action: "get-generation-job", jobId: submitted.data.jobId }),
