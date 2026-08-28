@@ -29,6 +29,7 @@ import { readTrialAccessCode, saveTrialAccessCode } from "../../platform/trial-a
 import { garmentGateway } from "../../services/active-garment-gateway";
 import type { CreateGenerationRequest } from "../../services/garment-gateway";
 import "./index.scss";
+import "./workbench.scss";
 
 const modes: readonly {
   value: GenerationMode;
@@ -81,6 +82,8 @@ const reviewStatusLabels: Record<Exclude<GarmentResultReviewStatus, "pending">, 
 };
 
 type ResultReviewMode = "idle" | "satisfied" | "issues" | "detailed";
+type WorkspacePanel = "brief" | "directions" | "result";
+type ResultPreview = "reference" | "current";
 
 function latestMatchingResult(
   results: readonly GenerationApiResponse[],
@@ -98,6 +101,8 @@ function latestMatchingResult(
 
 export default function Index() {
   const modelRequestInFlight = useRef(false);
+  const [activePanel, setActivePanel] = useState<WorkspacePanel>("brief");
+  const [resultPreview, setResultPreview] = useState<ResultPreview>("current");
   const [mode, setMode] = useState<GenerationMode>("quick-derivative");
   const [image, setImage] = useState<SelectedImage | null>(null);
   const [preserveItems, setPreserveItems] = useState("");
@@ -113,10 +118,10 @@ export default function Index() {
   const [analysisBasePreserveItems, setAnalysisBasePreserveItems] = useState<string[]>([]);
   const [confirmedPreserveItems, setConfirmedPreserveItems] = useState<string[]>([]);
   const [customPreserveItem, setCustomPreserveItem] = useState("");
+  const [preserveEditorOpen, setPreserveEditorOpen] = useState(false);
   const [selectedDirectionId, setSelectedDirectionId] = useState<string | null>(null);
   const [results, setResults] = useState<GenerationApiResponse[]>([]);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
-  const [revisionInstruction, setRevisionInstruction] = useState("");
   const [trialAccessRequired, setTrialAccessRequired] = useState(false);
   const [trialAccessCode, setTrialAccessCode] = useState(readTrialAccessCode);
   const [reviewStatuses, setReviewStatuses] = useState<
@@ -154,12 +159,18 @@ export default function Index() {
         );
         setActiveJobId(restored.jobId);
         setSelectedDirectionId(restored.directionId);
+        setResultPreview("current");
+        setActivePanel("result");
       })
       .catch(() => undefined);
     return () => {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    void Taro.pageScrollTo({ scrollTop: 0, duration: 0 });
+  }, [activePanel]);
 
   const busy = analyzing || generating || refining;
   const canRequest = useMemo(
@@ -197,6 +208,7 @@ export default function Index() {
     [analysisResult],
   );
   const selectedIntensity = intensities.find((item) => item.value === intensity) ?? intensities[1]!;
+  const selectedMode = modes.find((item) => item.value === mode) ?? modes[1]!;
   const activeDirection = useMemo(
     () =>
       analysisResult && activeResult?.directionId
@@ -240,15 +252,17 @@ export default function Index() {
     setAnalysisBasePreserveItems([]);
     setConfirmedPreserveItems([]);
     setCustomPreserveItem("");
+    setPreserveEditorOpen(false);
     setSelectedDirectionId(null);
     setResults([]);
     setActiveJobId(null);
-    setRevisionInstruction("");
     setReviewStatuses({});
     setReviewModes({});
     setReviewFeedbacks({});
     setReviewChecklistOpen({});
     setErrorMessage("");
+    setResultPreview("current");
+    setActivePanel("brief");
   }
 
   function requestInput(): CreateGenerationRequest | null {
@@ -297,7 +311,6 @@ export default function Index() {
     setSelectedDirectionId(null);
     setResults([]);
     setActiveJobId(null);
-    setRevisionInstruction("");
     try {
       const nextAnalysis = await garmentGateway.analyzeGarment(input);
       const basePreserveItems = [...parsePreserveItems(input.preserveItems)];
@@ -305,7 +318,9 @@ export default function Index() {
       setAnalysisBasePreserveItems(basePreserveItems);
       setConfirmedPreserveItems(basePreserveItems);
       setCustomPreserveItem("");
+      setPreserveEditorOpen(false);
       setSelectedDirectionId(nextAnalysis.analysis.recommendedDirectionId);
+      setActivePanel("directions");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "分析失败，请稍后重试。");
     } finally {
@@ -346,6 +361,8 @@ export default function Index() {
           : [...current, nextResult],
       );
       setActiveJobId(nextResult.jobId);
+      setResultPreview("current");
+      setActivePanel("result");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "生成失败，请稍后重试。");
     } finally {
@@ -354,8 +371,8 @@ export default function Index() {
     }
   }
 
-  async function refineCurrentResult(instructionOverride?: string) {
-    const instruction = (instructionOverride ?? revisionInstruction).trim();
+  async function refineCurrentResult(instructionInput: string) {
+    const instruction = instructionInput.trim();
     if (!activeResult || instruction.length < 2 || busy || modelRequestInFlight.current) {
       return;
     }
@@ -378,8 +395,9 @@ export default function Index() {
       );
       setActiveJobId(nextResult.jobId);
       setSelectedDirectionId(nextResult.directionId);
-      setRevisionInstruction("");
       setReviewFeedbacks((current) => ({ ...current, [parentJobId]: "" }));
+      setResultPreview("current");
+      setActivePanel("result");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "继续修改失败，请稍后重试。");
     } finally {
@@ -512,12 +530,16 @@ export default function Index() {
   }
 
   function applySelectedReviewIssues(): void {
-    if (selectedReviewIssues.length === 0) {
+    if (!activeResult || selectedReviewIssues.length === 0) {
       return;
     }
-    setRevisionInstruction(createGarmentRefinementInstruction(selectedReviewIssues));
-    void Taro.showToast({ title: "已填入下方修改要求", icon: "success" });
-    void Taro.pageScrollTo({ selector: "#refinement-panel", duration: 300 });
+    setReviewFeedbacks((current) => ({
+      ...current,
+      [activeResult.jobId]: createGarmentRefinementInstruction(selectedReviewIssues),
+    }));
+    setActiveReviewMode("issues");
+    void Taro.showToast({ title: "已整理成修改要求", icon: "success" });
+    void Taro.pageScrollTo({ selector: "#result-review-panel", duration: 300 });
   }
 
   function generateReviewRevision(): void {
@@ -527,14 +549,25 @@ export default function Index() {
     void refineCurrentResult(activeReviewInstruction);
   }
 
+  function openIssuesReview(): void {
+    setActiveReviewMode("issues");
+    setTimeout(() => {
+      void Taro.pageScrollTo({ selector: "#result-review-panel", duration: 240 });
+    }, 0);
+  }
+
   return (
-    <View className={`page-shell ${process.env.TARO_ENV === "weapp" ? "page-shell--weapp" : ""}`}>
-      <View className="hero">
-        <Text className="eyebrow">AI GARMENT STUDIO</Text>
-        <Text className="hero-title">从一件原款，找到下一件好卖的衣服</Text>
-        <Text className="hero-copy">
-          先识别可信的原款结构，再选择设计方向，最后生成一张效果图。
-        </Text>
+    <View
+      className={`page-shell ${process.env.TARO_ENV === "weapp" ? "page-shell--weapp" : "page-shell--h5"}`}
+    >
+      <View className="workbench-header">
+        <View className="workbench-brand">
+          <Text className="workbench-brand-mark">款</Text>
+          <View>
+            <Text className="workbench-brand-name">改款工作台</Text>
+            <Text className="workbench-brand-meta">STYLE DEVELOPMENT / 01</Text>
+          </View>
+        </View>
         {process.env.TARO_ENV === "weapp" && (
           <Button
             className="cloud-diagnostics-entry"
@@ -545,379 +578,485 @@ export default function Index() {
         )}
       </View>
 
-      {trialAccessRequired && (
-        <View className="access-card">
-          <Text className="access-title">小范围试用</Text>
-          <Text className="access-copy">请输入邀请方提供的访问码，模型密钥不会发送到设备端。</Text>
-          <Input
-            className="access-input"
-            disabled={busy}
-            password
-            value={trialAccessCode}
-            maxlength={128}
-            placeholder="试用访问码"
-            onInput={(event) => setTrialAccessCode(event.detail.value)}
-            onBlur={() => saveTrialAccessCode(trialAccessCode)}
-          />
-        </View>
-      )}
-
-      <View className="section">
-        <View className="section-heading">
-          <Text className="step-number">01</Text>
-          <Text className="section-title">选择使用场景</Text>
-        </View>
-        <View className="mode-grid">
-          {modes.map((item) => (
-            <View
-              key={item.value}
-              className={`mode-card ${mode === item.value ? "mode-card--active" : ""} ${busy ? "mode-card--disabled" : ""}`}
-              onClick={() => {
-                if (busy) {
-                  return;
-                }
-                setMode(item.value);
-                clearDerivedState();
-              }}
-            >
-              <Text className="mode-badge">{item.badge}</Text>
-              <Text className="mode-title">{item.title}</Text>
-              <Text className="mode-copy">{item.description}</Text>
-            </View>
-          ))}
-        </View>
-      </View>
-
-      <View className="section">
-        <View className="section-heading">
-          <Text className="step-number">02</Text>
-          <Text className="section-title">上传原款图片</Text>
+      <View className="stage-rail">
+        <View
+          className={`stage-rail-item ${activePanel === "brief" ? "stage-rail-item--active" : ""}`}
+          onClick={() => setActivePanel("brief")}
+        >
+          <Text className="stage-rail-index">01</Text>
+          <Text className="stage-rail-label">原款与要求</Text>
         </View>
         <View
-          className={`upload-card ${image ? "upload-card--filled" : ""} ${busy ? "upload-card--disabled" : ""}`}
-          onClick={chooseImage}
+          className={`stage-rail-item ${activePanel === "directions" ? "stage-rail-item--active" : ""} ${!analysisResult ? "stage-rail-item--disabled" : ""}`}
+          onClick={() => {
+            if (analysisResult) {
+              setActivePanel("directions");
+            }
+          }}
         >
-          {image ? (
-            <>
-              <Image className="source-image" src={image.path} mode="aspectFit" />
-              <View className="replace-pill">点击更换</View>
-            </>
-          ) : (
-            <>
-              <Text className="upload-mark">＋</Text>
-              <Text className="upload-title">拍照或从相册选择</Text>
-              <Text className="upload-hint">JPG / PNG / WEBP，最大 10 MB</Text>
-            </>
-          )}
+          <Text className="stage-rail-index">02</Text>
+          <Text className="stage-rail-label">设计方向</Text>
         </View>
-      </View>
-
-      <View className="section form-section">
-        <View className="section-heading">
-          <Text className="step-number">03</Text>
-          <Text className="section-title">写下改款方向</Text>
+        <View
+          className={`stage-rail-item ${activePanel === "result" ? "stage-rail-item--active" : ""} ${!activeResult ? "stage-rail-item--disabled" : ""}`}
+          onClick={() => {
+            if (activeResult) {
+              setActivePanel("result");
+            }
+          }}
+        >
+          <Text className="stage-rail-index">03</Text>
+          <Text className="stage-rail-label">结果与版本</Text>
         </View>
-
-        <Text className="field-label">必须保留</Text>
-        <Textarea
-          className="field-input field-input--short"
-          disabled={busy}
-          value={preserveItems}
-          maxlength={500}
-          placeholder="例如：黑白格纹袖口、深蓝牛仔面料"
-          onInput={(event) => {
-            setPreserveItems(event.detail.value);
-            clearDerivedState();
-          }}
-        />
-        <Text className="field-tip">多个保留项可用逗号分隔，它们会作为生图硬约束。</Text>
-
-        <Text className="field-label">想怎么改</Text>
-        <Textarea
-          className="field-input"
-          disabled={busy}
-          value={changeRequest}
-          maxlength={1_000}
-          placeholder="例如：调整为复古工装短夹克，重做整体廓形、结构分割、门襟、口袋和五金"
-          onInput={(event) => {
-            setChangeRequest(event.detail.value);
-            clearDerivedState();
-          }}
-        />
-
-        <Text className="field-label">目标风格</Text>
-        <Textarea
-          className="field-input field-input--short"
-          disabled={busy}
-          value={styleDirection}
-          maxlength={500}
-          placeholder="例如：90 年代日系复古工装，真实可打样"
-          onInput={(event) => {
-            setStyleDirection(event.detail.value);
-            clearDerivedState();
-          }}
-        />
-
-        <Text className="field-label">改款幅度</Text>
-        <View className="intensity-control">
-          {intensities.map((item) => (
-            <View
-              key={item.value}
-              className={`intensity-option ${intensity === item.value ? "intensity-option--active" : ""} ${busy ? "intensity-option--disabled" : ""}`}
-              onClick={() => {
-                if (busy) {
-                  return;
-                }
-                setIntensity(item.value);
-                clearDerivedState();
-              }}
-            >
-              {item.label}
-            </View>
-          ))}
-        </View>
-        <Text className="intensity-description">{selectedIntensity.description}</Text>
       </View>
 
       {errorMessage && <View className="error-card">{errorMessage}</View>}
 
-      {!analysisResult && (
+      {activePanel === "brief" && (
         <>
-          <Button className="generate-button" disabled={!canRequest} onClick={analyze}>
-            {analyzing ? "正在分析原款，预计 1–2 分钟…" : "分析原款并生成 3 个方向"}
-          </Button>
-          <Button className="text-button" disabled={!canRequest} onClick={() => generate(false)}>
-            {generating
-              ? "正在创建并处理生成任务…"
-              : latestDirectResult
-                ? "按原要求再生成一版"
-                : "跳过分析，直接生成"}
-          </Button>
-        </>
-      )}
-      <Text className="privacy-note">原图仅用于当前请求；模型密钥不会发送到手机端</Text>
-
-      {analysisResult && (
-        <View className="section analysis-section">
-          <View className="section-heading">
-            <Text className="step-number">04</Text>
-            <View>
-              <Text className="section-title">选择设计方向</Text>
-              <Text className="analysis-meta">
-                采纳 {analysisResult.evidenceSummary.accepted} 项可见事实 · 待复核{" "}
-                {analysisResult.evidenceSummary.needsReview} 项 · 未知{" "}
-                {analysisResult.evidenceSummary.unknown} 项
-              </Text>
-            </View>
-          </View>
-
-          <View className="preserve-confirmation">
-            <View className="preserve-confirmation-heading">
-              <View>
-                <Text className="preserve-confirmation-title">确认本次锁定项</Text>
-                <Text className="preserve-confirmation-copy">
-                  AI 只提供高置信度可见事实作为候选；只有你确认的内容才会成为生图硬约束。
-                </Text>
-              </View>
-              <Text className="preserve-count">
-                {confirmedPreserveItems.length}/{maximumConfirmedPreserveItems}
-              </Text>
-            </View>
-
-            {confirmedPreserveItems.length > 0 ? (
-              <View className="confirmed-preserve-list">
-                {confirmedPreserveItems.map((item) => {
-                  const fromOriginalBrief = analysisBasePreserveItems.includes(item);
-                  return (
-                    <View
-                      key={item}
-                      className={`confirmed-preserve-chip ${fromOriginalBrief ? "confirmed-preserve-chip--original" : ""}`}
-                      onClick={() => removeConfirmedPreserveItem(item)}
-                    >
-                      <Text>{item}</Text>
-                      <Text className="confirmed-preserve-source">
-                        {fromOriginalBrief ? "你填写" : "移除 ×"}
-                      </Text>
-                    </View>
-                  );
-                })}
-              </View>
-            ) : (
-              <Text className="preserve-empty">尚未锁定具体元素，模型只会维持基本品类与主体。</Text>
-            )}
-
-            <Text className="preserve-subtitle">AI 识别的可见事实</Text>
-            <View className="preserve-suggestion-list">
-              {preserveSuggestions
-                .filter((suggestion) => !confirmedPreserveItems.includes(suggestion.preserveItem))
-                .map((suggestion) => (
-                  <View
-                    key={suggestion.id}
-                    className={`preserve-suggestion ${busy || locksFrozen ? "preserve-suggestion--disabled" : ""}`}
-                    onClick={() => addConfirmedPreserveItem(suggestion.preserveItem)}
-                  >
-                    <Text className="preserve-suggestion-label">＋ {suggestion.label}</Text>
-                    <Text className="preserve-suggestion-value">{suggestion.value}</Text>
-                    <Text className="preserve-suggestion-confidence">
-                      可信度 {Math.round(suggestion.confidence * 100)}%
-                    </Text>
-                  </View>
-                ))}
-            </View>
-            {preserveSuggestions.length === 0 ? (
-              <Text className="preserve-empty">没有可直接作为候选的高置信度可见事实。</Text>
-            ) : (
-              preserveSuggestions.every((suggestion) =>
-                confirmedPreserveItems.includes(suggestion.preserveItem),
-              ) && <Text className="preserve-empty">当前可见事实已经全部处理。</Text>
-            )}
-
-            <View className="custom-preserve-row">
-              <Input
-                className="custom-preserve-input"
-                disabled={busy || locksFrozen}
-                value={customPreserveItem}
-                maxlength={100}
-                placeholder="补充一个需要保留的元素"
-                onInput={(event) => setCustomPreserveItem(event.detail.value)}
-                onConfirm={() => addCustomPreserveItem()}
-              />
-              <Button
-                className="custom-preserve-button"
-                disabled={busy || locksFrozen || customPreserveItem.trim().length === 0}
-                onClick={addCustomPreserveItem}
-              >
-                加入
-              </Button>
-            </View>
-            <Text className="preserve-footnote">
-              {locksFrozen
-                ? "本轮已有生成版本，锁定项已冻结；需要调整时请重新分析，避免历史版本与新约束混淆。"
-                : "上方“必须保留”是本次分析的原始硬约束；修改它会重新开始分析。"}
+          <View className="hero">
+            <Text className="eyebrow">NEW STYLE BRIEF</Text>
+            <Text className="hero-title">从原款出发，建立下一版设计</Text>
+            <Text className="hero-copy">
+              保留什么、改变什么先说清楚；生成前先看三个可执行的设计方向。
             </Text>
           </View>
 
-          <View className="direction-list">
-            {analysisResult.analysis.designDirections.map((direction) => {
-              const selected = selectedDirectionId === direction.id;
-              const recommended = analysisResult.analysis.recommendedDirectionId === direction.id;
-              const directionPreserveItems = mergePreserveItems(
-                confirmedPreserveItems,
-                direction.preserve,
-              );
-              return (
-                <View
-                  key={direction.id}
-                  className={`direction-card ${selected ? "direction-card--active" : ""}`}
-                  onClick={() => {
-                    if (busy) {
-                      return;
-                    }
-                    setSelectedDirectionId(direction.id);
-                    const existing = latestMatchingResult(results, "analyzed", direction.id);
-                    setActiveJobId(existing?.jobId ?? null);
-                    setRevisionInstruction("");
-                  }}
-                >
-                  <View className="direction-heading">
-                    <Text className="direction-name">{direction.name}</Text>
-                    <View className="direction-badges">
-                      {selected && <Text className="selected-badge">已选择</Text>}
-                      {recommended && <Text className="recommended-badge">推荐</Text>}
-                    </View>
-                  </View>
-                  <Text className="direction-summary">{direction.summary}</Text>
-                  <View className="direction-area-list">
-                    {[...new Set(direction.changes.map((change) => change.area))].map((area) => (
-                      <Text key={area} className="direction-area-chip">
-                        {garmentChangeAreaLabels[area]}
-                      </Text>
-                    ))}
-                  </View>
-                  {selected ? (
-                    <>
-                      {recommended && (
-                        <Text className="recommendation-reason">
-                          推荐理由：{analysisResult.analysis.recommendationReason}
-                        </Text>
-                      )}
-                      <View className="direction-overview">
-                        <Text className="direction-overview-label">改款幅度</Text>
-                        <Text className="direction-overview-value">{selectedIntensity.label}</Text>
-                        <Text className="direction-overview-copy">
-                          {selectedIntensity.description}
-                        </Text>
-                      </View>
-                      <View className="direction-preserve-block">
-                        <Text className="direction-detail-title">继承的保留项</Text>
-                        <View className="direction-preserve-list">
-                          {directionPreserveItems.map((item) => (
-                            <Text key={item} className="direction-preserve-chip">
-                              {formatGarmentPreserveItem(item)}
-                            </Text>
-                          ))}
-                        </View>
-                      </View>
-                      <Text className="direction-detail-title direction-detail-title--changes">
-                        主要变化
-                      </Text>
-                      <View className="change-list">
-                        {direction.changes.map((change) => (
-                          <View
-                            key={`${change.area}-${change.instruction}`}
-                            className="change-item"
-                          >
-                            <Text className="change-area">
-                              {garmentChangeAreaLabels[change.area]}
-                            </Text>
-                            <View className="change-content">
-                              <Text className="change-instruction">{change.instruction}</Text>
-                              <Text className="change-reason">{change.reason}</Text>
-                            </View>
-                          </View>
-                        ))}
-                      </View>
-                    </>
-                  ) : (
-                    <Text className="direction-expand-hint">点击查看保留项和完整改款清单</Text>
-                  )}
-                  <Text className={`risk-label risk-label--${direction.productionRisk.level}`}>
-                    {riskLabels[direction.productionRisk.level]} · {direction.productionRisk.reason}
-                  </Text>
-                </View>
-              );
-            })}
-          </View>
-
-          {analysisResult.analysis.conflictsOrQuestions.length > 0 && (
-            <View className="review-note">
-              <Text className="review-title">分析提醒</Text>
-              {analysisResult.analysis.conflictsOrQuestions.map((question) => (
-                <Text key={question} className="review-item">
-                  · {question}
-                </Text>
-              ))}
+          {trialAccessRequired && (
+            <View className="access-card">
+              <Text className="access-title">小范围试用</Text>
+              <Text className="access-copy">
+                请输入邀请方提供的访问码，模型密钥不会发送到设备端。
+              </Text>
+              <Input
+                className="access-input"
+                disabled={busy}
+                password
+                value={trialAccessCode}
+                maxlength={128}
+                placeholder="试用访问码"
+                onInput={(event) => setTrialAccessCode(event.detail.value)}
+                onBlur={() => saveTrialAccessCode(trialAccessCode)}
+              />
             </View>
           )}
 
-          <Button
-            className="generate-button"
-            disabled={!canGenerateAnalyzed}
-            onClick={() => generate(true)}
-          >
-            {generating
-              ? "正在创建并处理生成任务…"
-              : latestSelectedDirectionResult
-                ? "按选中方向再生成一版"
-                : "按选中方向生成效果图"}
-          </Button>
-          <Button className="text-button" disabled={busy} onClick={analyze}>
-            重新分析原款
-          </Button>
-        </View>
+          <View className="brief-workspace">
+            <View className="section section--mode">
+              <View className="section-heading">
+                <Text className="step-number">01</Text>
+                <Text className="section-title">选择使用场景</Text>
+              </View>
+              <View className="mode-grid">
+                {modes.map((item) => (
+                  <View
+                    key={item.value}
+                    className={`mode-card ${mode === item.value ? "mode-card--active" : ""} ${busy ? "mode-card--disabled" : ""}`}
+                    onClick={() => {
+                      if (busy) {
+                        return;
+                      }
+                      setMode(item.value);
+                      clearDerivedState();
+                    }}
+                  >
+                    <Text className="mode-badge">{item.badge}</Text>
+                    <Text className="mode-title">{item.title}</Text>
+                    <Text className="mode-copy">{item.description}</Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+
+            <View className="section section--source">
+              <View className="section-heading">
+                <Text className="step-number">02</Text>
+                <Text className="section-title">上传原款图片</Text>
+              </View>
+              <View
+                className={`upload-card ${image ? "upload-card--filled" : ""} ${busy ? "upload-card--disabled" : ""}`}
+                onClick={chooseImage}
+              >
+                {image ? (
+                  <>
+                    <Image className="source-image" src={image.path} mode="aspectFit" />
+                    <View className="replace-pill">点击更换</View>
+                  </>
+                ) : (
+                  <>
+                    <Text className="upload-mark">＋</Text>
+                    <Text className="upload-title">拍照或从相册选择</Text>
+                    <Text className="upload-hint">JPG / PNG / WEBP，最大 10 MB</Text>
+                  </>
+                )}
+              </View>
+            </View>
+
+            <View className="section section--brief form-section">
+              <View className="section-heading">
+                <Text className="step-number">03</Text>
+                <Text className="section-title">写下改款方向</Text>
+              </View>
+
+              <Text className="field-label">必须保留</Text>
+              <Textarea
+                className="field-input field-input--short"
+                disabled={busy}
+                value={preserveItems}
+                maxlength={500}
+                placeholder="例如：黑白格纹袖口、深蓝牛仔面料"
+                onInput={(event) => {
+                  setPreserveItems(event.detail.value);
+                  clearDerivedState();
+                }}
+              />
+              <Text className="field-tip">多个保留项可用逗号分隔，它们会作为生图硬约束。</Text>
+
+              <Text className="field-label">想怎么改</Text>
+              <Textarea
+                className="field-input"
+                disabled={busy}
+                value={changeRequest}
+                maxlength={1_000}
+                placeholder="例如：调整为复古工装短夹克，重做整体廓形、结构分割、门襟、口袋和五金"
+                onInput={(event) => {
+                  setChangeRequest(event.detail.value);
+                  clearDerivedState();
+                }}
+              />
+
+              <Text className="field-label">目标风格</Text>
+              <Textarea
+                className="field-input field-input--short"
+                disabled={busy}
+                value={styleDirection}
+                maxlength={500}
+                placeholder="例如：90 年代日系复古工装，真实可打样"
+                onInput={(event) => {
+                  setStyleDirection(event.detail.value);
+                  clearDerivedState();
+                }}
+              />
+
+              <Text className="field-label">改款幅度</Text>
+              <View className="intensity-control">
+                {intensities.map((item) => (
+                  <View
+                    key={item.value}
+                    className={`intensity-option ${intensity === item.value ? "intensity-option--active" : ""} ${busy ? "intensity-option--disabled" : ""}`}
+                    onClick={() => {
+                      if (busy) {
+                        return;
+                      }
+                      setIntensity(item.value);
+                      clearDerivedState();
+                    }}
+                  >
+                    {item.label}
+                  </View>
+                ))}
+              </View>
+              <Text className="intensity-description">{selectedIntensity.description}</Text>
+            </View>
+          </View>
+
+          <View className="brief-actions">
+            <Button
+              className="generate-button"
+              disabled={!canRequest}
+              onClick={() => {
+                if (analysisResult) {
+                  setActivePanel("directions");
+                  return;
+                }
+                void analyze();
+              }}
+            >
+              {analyzing
+                ? "正在分析原款，预计 1–2 分钟…"
+                : analysisResult
+                  ? "继续查看设计方向"
+                  : "分析原款，查看 3 个方向"}
+            </Button>
+            {!analysisResult && (
+              <Button
+                className="text-button"
+                disabled={!canRequest}
+                onClick={() => generate(false)}
+              >
+                {generating
+                  ? "正在创建并处理生成任务…"
+                  : latestDirectResult
+                    ? "按原要求再生成一版"
+                    : "跳过分析，直接生成"}
+              </Button>
+            )}
+            <Text className="privacy-note">原图仅用于当前请求；模型密钥不会发送到手机端</Text>
+          </View>
+        </>
       )}
 
-      {activeResult && (
+      {activePanel === "directions" && analysisResult && (
+        <>
+          <View className="stage-context">
+            {image && <Image className="stage-context-image" src={image.path} mode="aspectFill" />}
+            <View className="stage-context-copy">
+              <Text className="stage-context-kicker">CURRENT BRIEF</Text>
+              <Text className="stage-context-title">
+                {selectedMode.title} · {selectedIntensity.label}
+              </Text>
+              <Text className="stage-context-meta">{changeRequest}</Text>
+            </View>
+            <View className="stage-context-action" onClick={() => setActivePanel("brief")}>
+              编辑
+            </View>
+          </View>
+          <View className="section analysis-section">
+            <View className="section-heading">
+              <Text className="step-number">02</Text>
+              <View>
+                <Text className="section-title">选择设计方向</Text>
+                <Text className="analysis-meta">
+                  采纳 {analysisResult.evidenceSummary.accepted} 项可见事实 · 待复核{" "}
+                  {analysisResult.evidenceSummary.needsReview} 项 · 未知{" "}
+                  {analysisResult.evidenceSummary.unknown} 项
+                </Text>
+              </View>
+            </View>
+
+            <View className="preserve-confirmation">
+              <View className="preserve-confirmation-heading">
+                <View>
+                  <Text className="preserve-confirmation-title">确认本次锁定项</Text>
+                  <Text className="preserve-confirmation-copy">
+                    AI 只提供高置信度可见事实作为候选；只有你确认的内容才会成为生图硬约束。
+                  </Text>
+                </View>
+                <Text className="preserve-count">
+                  {confirmedPreserveItems.length}/{maximumConfirmedPreserveItems}
+                </Text>
+              </View>
+
+              {confirmedPreserveItems.length > 0 ? (
+                <View className="confirmed-preserve-list">
+                  {confirmedPreserveItems.map((item) => {
+                    const fromOriginalBrief = analysisBasePreserveItems.includes(item);
+                    return (
+                      <View
+                        key={item}
+                        className={`confirmed-preserve-chip ${fromOriginalBrief ? "confirmed-preserve-chip--original" : ""}`}
+                        onClick={() => removeConfirmedPreserveItem(item)}
+                      >
+                        <Text>{item}</Text>
+                        <Text className="confirmed-preserve-source">
+                          {fromOriginalBrief ? "你填写" : "移除 ×"}
+                        </Text>
+                      </View>
+                    );
+                  })}
+                </View>
+              ) : (
+                <Text className="preserve-empty">
+                  尚未锁定具体元素，模型只会维持基本品类与主体。
+                </Text>
+              )}
+
+              <View
+                className="preserve-editor-toggle"
+                onClick={() => setPreserveEditorOpen((current) => !current)}
+              >
+                <View>
+                  <Text className="preserve-editor-toggle-title">补充锁定项（可选）</Text>
+                  <Text className="preserve-editor-toggle-copy">
+                    从 {preserveSuggestions.length} 项高置信度可见事实中选择，正常情况可直接跳过。
+                  </Text>
+                </View>
+                <Text className="preserve-editor-toggle-state">
+                  {preserveEditorOpen ? "收起" : "展开"}
+                </Text>
+              </View>
+
+              {preserveEditorOpen && (
+                <>
+                  <Text className="preserve-subtitle">AI 识别的可见事实</Text>
+                  <View className="preserve-suggestion-list">
+                    {preserveSuggestions
+                      .filter(
+                        (suggestion) => !confirmedPreserveItems.includes(suggestion.preserveItem),
+                      )
+                      .map((suggestion) => (
+                        <View
+                          key={suggestion.id}
+                          className={`preserve-suggestion ${busy || locksFrozen ? "preserve-suggestion--disabled" : ""}`}
+                          onClick={() => addConfirmedPreserveItem(suggestion.preserveItem)}
+                        >
+                          <Text className="preserve-suggestion-label">＋ {suggestion.label}</Text>
+                          <Text className="preserve-suggestion-value">{suggestion.value}</Text>
+                          <Text className="preserve-suggestion-confidence">
+                            可信度 {Math.round(suggestion.confidence * 100)}%
+                          </Text>
+                        </View>
+                      ))}
+                  </View>
+                  {preserveSuggestions.length === 0 ? (
+                    <Text className="preserve-empty">没有可直接作为候选的高置信度可见事实。</Text>
+                  ) : (
+                    preserveSuggestions.every((suggestion) =>
+                      confirmedPreserveItems.includes(suggestion.preserveItem),
+                    ) && <Text className="preserve-empty">当前可见事实已经全部处理。</Text>
+                  )}
+
+                  <View className="custom-preserve-row">
+                    <Input
+                      className="custom-preserve-input"
+                      disabled={busy || locksFrozen}
+                      value={customPreserveItem}
+                      maxlength={100}
+                      placeholder="补充一个需要保留的元素"
+                      onInput={(event) => setCustomPreserveItem(event.detail.value)}
+                      onConfirm={() => addCustomPreserveItem()}
+                    />
+                    <Button
+                      className="custom-preserve-button"
+                      disabled={busy || locksFrozen || customPreserveItem.trim().length === 0}
+                      onClick={addCustomPreserveItem}
+                    >
+                      加入
+                    </Button>
+                  </View>
+                </>
+              )}
+              <Text className="preserve-footnote">
+                {locksFrozen
+                  ? "本轮已有生成版本，锁定项已冻结；需要调整时请重新分析，避免历史版本与新约束混淆。"
+                  : "上方“必须保留”是本次分析的原始硬约束；修改它会重新开始分析。"}
+              </Text>
+            </View>
+
+            <View className="direction-list">
+              {analysisResult.analysis.designDirections.map((direction) => {
+                const selected = selectedDirectionId === direction.id;
+                const recommended = analysisResult.analysis.recommendedDirectionId === direction.id;
+                const directionPreserveItems = mergePreserveItems(
+                  confirmedPreserveItems,
+                  direction.preserve,
+                );
+                return (
+                  <View
+                    key={direction.id}
+                    className={`direction-card ${selected ? "direction-card--active" : ""}`}
+                    onClick={() => {
+                      if (busy) {
+                        return;
+                      }
+                      setSelectedDirectionId(direction.id);
+                      const existing = latestMatchingResult(results, "analyzed", direction.id);
+                      setActiveJobId(existing?.jobId ?? null);
+                    }}
+                  >
+                    <View className="direction-heading">
+                      <Text className="direction-name">{direction.name}</Text>
+                      <View className="direction-badges">
+                        {selected && <Text className="selected-badge">已选择</Text>}
+                        {recommended && <Text className="recommended-badge">推荐</Text>}
+                      </View>
+                    </View>
+                    <Text className="direction-summary">{direction.summary}</Text>
+                    <View className="direction-area-list">
+                      {[...new Set(direction.changes.map((change) => change.area))].map((area) => (
+                        <Text key={area} className="direction-area-chip">
+                          {garmentChangeAreaLabels[area]}
+                        </Text>
+                      ))}
+                    </View>
+                    {selected ? (
+                      <>
+                        {recommended && (
+                          <Text className="recommendation-reason">
+                            推荐理由：{analysisResult.analysis.recommendationReason}
+                          </Text>
+                        )}
+                        <View className="direction-overview">
+                          <Text className="direction-overview-label">改款幅度</Text>
+                          <Text className="direction-overview-value">
+                            {selectedIntensity.label}
+                          </Text>
+                          <Text className="direction-overview-copy">
+                            {selectedIntensity.description}
+                          </Text>
+                        </View>
+                        <View className="direction-preserve-block">
+                          <Text className="direction-detail-title">继承的保留项</Text>
+                          <View className="direction-preserve-list">
+                            {directionPreserveItems.map((item) => (
+                              <Text key={item} className="direction-preserve-chip">
+                                {formatGarmentPreserveItem(item)}
+                              </Text>
+                            ))}
+                          </View>
+                        </View>
+                        <Text className="direction-detail-title direction-detail-title--changes">
+                          主要变化
+                        </Text>
+                        <View className="change-list">
+                          {direction.changes.map((change) => (
+                            <View
+                              key={`${change.area}-${change.instruction}`}
+                              className="change-item"
+                            >
+                              <Text className="change-area">
+                                {garmentChangeAreaLabels[change.area]}
+                              </Text>
+                              <View className="change-content">
+                                <Text className="change-instruction">{change.instruction}</Text>
+                                <Text className="change-reason">{change.reason}</Text>
+                              </View>
+                            </View>
+                          ))}
+                        </View>
+                      </>
+                    ) : (
+                      <Text className="direction-expand-hint">点击查看保留项和完整改款清单</Text>
+                    )}
+                    <Text className={`risk-label risk-label--${direction.productionRisk.level}`}>
+                      {riskLabels[direction.productionRisk.level]} ·{" "}
+                      {direction.productionRisk.reason}
+                    </Text>
+                  </View>
+                );
+              })}
+            </View>
+
+            {analysisResult.analysis.conflictsOrQuestions.length > 0 && (
+              <View className="review-note">
+                <Text className="review-title">分析提醒</Text>
+                {analysisResult.analysis.conflictsOrQuestions.map((question) => (
+                  <Text key={question} className="review-item">
+                    · {question}
+                  </Text>
+                ))}
+              </View>
+            )}
+
+            <Button
+              className="generate-button"
+              disabled={!canGenerateAnalyzed}
+              onClick={() => generate(true)}
+            >
+              {generating
+                ? "正在创建并处理生成任务…"
+                : latestSelectedDirectionResult
+                  ? "按选中方向再生成一版"
+                  : "按选中方向生成效果图"}
+            </Button>
+            <Button className="text-button" disabled={busy} onClick={analyze}>
+              重新分析原款
+            </Button>
+          </View>
+        </>
+      )}
+
+      {activePanel === "result" && activeResult && (
         <View className="result-section">
           <View className="result-heading">
             <Text className="result-kicker">DESIGN READY</Text>
@@ -925,28 +1064,36 @@ export default function Index() {
             <Text className="result-summary">{activeResult.summary}</Text>
           </View>
 
-          <View
-            className={`comparison-grid ${!image && !parentResult ? "comparison-grid--single" : ""}`}
-          >
+          <View className="result-preview-switch">
             {(image || parentResult) && (
-              <View className="comparison-item">
-                <Text className="comparison-label">
-                  {activeResult.operation === "refine" && parentResult ? "上一版" : "原图"}
-                </Text>
-                <Image
-                  className="comparison-image"
-                  src={
-                    activeResult.operation === "refine" && parentResult
-                      ? parentResult.resultUrl
-                      : image!.path
-                  }
-                  mode="aspectFit"
-                />
+              <View
+                className={`result-preview-option ${resultPreview === "reference" ? "result-preview-option--active" : ""}`}
+                onClick={() => setResultPreview("reference")}
+              >
+                {activeResult.operation === "refine" && parentResult ? "上一版" : "原图"}
               </View>
             )}
+            <View
+              className={`result-preview-option ${resultPreview === "current" ? "result-preview-option--active" : ""}`}
+              onClick={() => setResultPreview("current")}
+            >
+              当前结果
+            </View>
+          </View>
+
+          <View className="comparison-grid comparison-grid--single">
             <View className="comparison-item">
-              <Text className="comparison-label comparison-label--current">当前结果</Text>
-              <Image className="comparison-image" src={activeResult.resultUrl} mode="aspectFit" />
+              <Image
+                className="comparison-image"
+                src={
+                  resultPreview === "reference" && (image || parentResult)
+                    ? activeResult.operation === "refine" && parentResult
+                      ? parentResult.resultUrl
+                      : image!.path
+                    : activeResult.resultUrl
+                }
+                mode="aspectFit"
+              />
             </View>
           </View>
 
@@ -958,7 +1105,30 @@ export default function Index() {
             </Text>
           </View>
 
-          <View className="result-review-panel">
+          <View className="result-primary-actions">
+            <Button
+              className="result-primary-action result-primary-action--accent"
+              onClick={openIssuesReview}
+            >
+              改一下
+            </Button>
+            <Button
+              className="result-primary-action"
+              disabled={busy || !image || (activeResult.strategy === "analyzed" && !analysisResult)}
+              onClick={() => generate(activeResult.strategy === "analyzed", activeResult)}
+            >
+              {generating ? "生成中…" : "再出一版"}
+            </Button>
+            <Button
+              className="result-primary-action"
+              disabled={saving}
+              onClick={downloadCurrentResult}
+            >
+              {saving ? "保存中…" : "保存图片"}
+            </Button>
+          </View>
+
+          <View id="result-review-panel" className="result-review-panel">
             <View className="result-review-heading">
               <View>
                 <Text className="result-review-title">这版效果怎么样？</Text>
@@ -990,7 +1160,7 @@ export default function Index() {
                   </Button>
                   <Button
                     className="review-quick-action review-quick-action--issues"
-                    onClick={() => setActiveReviewMode("issues")}
+                    onClick={openIssuesReview}
                   >
                     <Text className="review-quick-action-title">需要修改</Text>
                     <Text className="review-quick-action-copy">直接描述，或勾选常见问题</Text>
@@ -1162,55 +1332,10 @@ export default function Index() {
               </>
             )}
           </View>
-
-          <View className="result-actions">
-            <Button
-              className="result-action result-action--primary"
-              disabled={busy || !image || (activeResult.strategy === "analyzed" && !analysisResult)}
-              onClick={() => generate(activeResult.strategy === "analyzed", activeResult)}
-            >
-              {generating
-                ? "正在处理生成任务…"
-                : !image || (activeResult.strategy === "analyzed" && !analysisResult)
-                  ? "重新开始后可再生成"
-                  : "按此方向再生成"}
-            </Button>
-            <Button className="result-action" disabled={saving} onClick={downloadCurrentResult}>
-              {saving ? "正在保存…" : "下载结果图"}
-            </Button>
-          </View>
-
-          {activeReviewMode !== "issues" && (
-            <View id="refinement-panel" className="refinement-panel">
-              <Text className="refinement-title">继续修改当前结果</Text>
-              <Text className="refinement-copy">
-                {image
-                  ? "系统会从原图重新生成下一版，原始保留项、选中方向和累计修改继续生效。"
-                  : "小程序会复用父任务在有效期内保存的原图；如果原图已过期，再提示你重新上传。"}
-              </Text>
-              <Textarea
-                className="refinement-input"
-                value={revisionInstruction}
-                maxlength={500}
-                placeholder="例如：袖型再宽松一点，门襟改为隐藏拉链，其余保持不变"
-                onInput={(event) => setRevisionInstruction(event.detail.value)}
-              />
-              <Text className="refinement-cost-note">
-                输入文字不会调用模型；点击下方按钮后使用 1 次生图额度。
-              </Text>
-              <Button
-                className="refinement-button"
-                disabled={busy || revisionInstruction.trim().length < 2}
-                onClick={() => void refineCurrentResult()}
-              >
-                {refining ? "正在处理修改任务…" : "生成修改后的下一版"}
-              </Button>
-            </View>
-          )}
         </View>
       )}
 
-      {results.length > 0 && (
+      {activePanel === "result" && results.length > 0 && (
         <View className="section history-section">
           <View className="history-heading">
             <Text className="section-title">本次生成历史</Text>
@@ -1224,7 +1349,7 @@ export default function Index() {
                 onClick={() => {
                   setActiveJobId(item.jobId);
                   setSelectedDirectionId(item.directionId);
-                  setRevisionInstruction("");
+                  setResultPreview("current");
                 }}
               >
                 <Image className="history-image" src={item.resultUrl} mode="aspectFill" />
