@@ -199,6 +199,59 @@ describe("WeChat cloud garment gateway", () => {
     );
   });
 
+  it("reuses the uploaded source and idempotency key while analysis is still running", async () => {
+    const uploadFile = vi.fn().mockResolvedValue({ fileID: "cloud://env/source.png" });
+    const analysisKeys: string[] = [];
+    let analysisCalls = 0;
+    const callFunction = vi.fn().mockImplementation(({ data }) => {
+      if (data.action === "get-capabilities") {
+        return Promise.resolve({ result: { ok: true, data: capabilities } });
+      }
+      analysisCalls += 1;
+      analysisKeys.push(data.idempotencyKey as string);
+      return Promise.resolve({
+        result:
+          analysisCalls === 1
+            ? {
+                ok: false,
+                error: {
+                  code: "ANALYSIS_EXECUTION_IN_PROGRESS",
+                  message: "同一分析请求仍在云端执行，请稍后重试。",
+                  requestId: "request-1",
+                  retryable: true,
+                },
+              }
+            : {
+                ok: true,
+                data: {
+                  analysisId: "00000000-0000-4000-8000-000000000001",
+                  status: "succeeded",
+                  provider: "alibaba-qwen-vl",
+                  model: "qwen3.7-plus",
+                  durationMs: 1_200,
+                  analysis,
+                  evidenceSummary: { accepted: 0, needsReview: 0, unknown: 16 },
+                },
+              },
+      });
+    });
+    const gateway = new WechatCloudGarmentGateway({
+      callFunction,
+      uploadFile,
+    } as WechatCloudGarmentClient);
+
+    await expect(gateway.analyzeGarment(input())).rejects.toMatchObject({
+      code: "ANALYSIS_EXECUTION_IN_PROGRESS",
+      retryable: true,
+    });
+    await expect(gateway.analyzeGarment(input())).resolves.toMatchObject({
+      provider: "alibaba-qwen-vl",
+    });
+    expect(uploadFile).toHaveBeenCalledTimes(1);
+    expect(analysisKeys).toHaveLength(2);
+    expect(analysisKeys[0]).toBe(analysisKeys[1]);
+  });
+
   it("rejects an inconsistent analysis without relying on a client-side Zod runtime", async () => {
     const uploadFile = vi.fn().mockResolvedValue({ fileID: "cloud://env/source.png" });
     const callFunction = vi.fn().mockImplementation(({ data }) =>

@@ -14,7 +14,7 @@
   → 删除云文件和数据库记录
 ```
 
-对应探针代码、自动化测试和独立云环境验证均已完成。这不是完整服装改款云端链路。仓库后续已经增加分析、生成、任务轮询、持久额度和测试结果转存的 Fake Provider，并已在真实环境完成分析、首次生成和再次生成切片；真实 Qwen/生图模型仍未迁移。
+对应探针代码、自动化测试和独立云环境验证均已完成。这不是完整服装改款云端链路。仓库后续已经增加分析、生成、任务轮询、持久额度和测试结果转存的 Fake Provider，并已在真实环境完成分析、首次生成和再次生成切片。真实 Qwen/生图 Provider 代码现已迁移并随函数部署，但云端仍保持 Fake 开关；付费真机验收仍未执行。
 
 ## 2. 固定环境
 
@@ -49,13 +49,13 @@ npm run audit:wechat-cloud
 
 构建脚本会把 `@cloth-idea/domain` 等工作区代码内联到 `index.js`，并在产物仍残留未解析的 `@cloth-idea/*` 引用时直接失败，防止云端因缺少本地 workspace 包而无法启动。
 
-推荐在仓库根目录通过 CloudBase CLI 部署，以确保首次创建就使用 `cloudbaserc.json` 中的 Node.js 20.19、30秒超时和256 MB内存：
+推荐在仓库根目录通过 CloudBase CLI 部署，以确保首次创建就使用 `cloudbaserc.json` 中的 Node.js 20.19、180秒超时和256 MB内存：
 
 ```bash
 npx --yes --package @cloudbase/cli@3.8.1 tcb fn deploy garment-api --json
 ```
 
-也可以回到微信开发者工具并重新编译。如果左侧没有出现 `cloudfunctions/garment-api`，关闭后重新导入 `apps/client`。随后右键 `garment-api`，选择“上传并部署：云端安装依赖”。开发者工具首次创建函数时可能选择不同运行时；运行时不能通过普通配置更新，部署后必须在云控制台核对为 Node.js 20.19。超时设为30秒；本探针不会接近该时限。
+也可以回到微信开发者工具并重新编译。如果左侧没有出现 `cloudfunctions/garment-api`，关闭后重新导入 `apps/client`。随后右键 `garment-api`，选择“上传并部署：云端安装依赖”。开发者工具首次创建函数时可能选择不同运行时；运行时不能通过普通配置更新，部署后必须在云控制台核对为 Node.js 20.19。超时设为180秒；基础设施探针不会接近该时限，真实 Provider 仍有独立的150秒请求预算。
 
 仓库中的 `cloudbaserc.json` 是云函数运行参数的准确信源；通过开发者工具部署后也必须按其中配置核对真实环境。
 
@@ -120,7 +120,7 @@ garment-source-temp/{viewerFingerprint}/incoming/{idempotencyKey}.{ext}
 
 2026-08-27 在独立环境 `cloud1-d1g87yl4k4cdf212b` 完成以下验证，全程未调用模型：
 
-- `garment-api` 以 Node.js 20.19、30秒超时和256 MB内存运行。
+- `garment-api` 首次探针验收时以 Node.js 20.19、30秒超时和256 MB内存运行；真实 Provider 代码迁移后已调整为180秒并重新部署。
 - `trial_members` 与 `infrastructure_probes` 已创建并设置为 `ADMINONLY`；小程序客户端不能直接读写。
 - 云存储权限为 `PRIVATE`，测试图片仅上传者与管理员可访问。
 - 首位体验成员以16位 OpenID 不可逆指纹加入白名单；数据库未保存原始 OpenID。
@@ -151,11 +151,13 @@ TRIAL_GLOBAL_DAILY_ANALYSIS_LIMIT=100
 TRIAL_GLOBAL_DAILY_GENERATION_LIMIT=200
 ASSET_RETENTION_HOURS=72
 FAKE_GENERATION_DELAY_MS=15000
+GENERATION_EXECUTION_LEASE_SECONDS=210
+MAX_REFINEMENT_DEPTH=3
 ```
 
-`WECHAT_CLOUD_BUSINESS_PROVIDER` 未设置为 `fake` 时，业务动作会返回 `CLOUD_BACKEND_NOT_DEPLOYED`；该默认关闭行为用于避免尚未验收的云端路径被误用。Fake 验收不需要配置任何 Qwen、万相或其他模型 Key。
+`WECHAT_CLOUD_BUSINESS_PROVIDER` 支持 `fake` 和 `alibaba-qwen`。未设置、设置为 `disabled`、配置值无效或真实模式缺少密钥/地址时，业务动作会返回 `CLOUD_BACKEND_NOT_DEPLOYED`；该默认关闭行为用于避免尚未验收的云端路径被误用。Fake 验收不需要配置任何 Qwen、万相或其他模型 Key。
 
-`FAKE_GENERATION_DELAY_MS` 只用于受控 Fake 真机验收：创建动作先持久化任务并立即返回，第一次状态查询领取执行租约后等待指定时间再转存结果。当前测试环境设为15秒，便于在任务仍为 `generating` 时退出并验证重进恢复；接入真实 Provider 后必须删除该人工延迟。
+`FAKE_GENERATION_DELAY_MS` 只用于受控 Fake 真机验收：创建动作先持久化任务并立即返回，第一次状态查询领取执行租约后等待指定时间再转存结果。当前测试环境设为15秒，便于在任务仍为 `generating` 时退出并验证重进恢复；切换真实 Provider 后该变量不会生效。210秒租约必须长于150秒 Provider预算和函数收尾时间，避免正常长请求被误判为可接管。
 
 重新部署云函数后，用微信云网关构建小程序：
 
@@ -184,7 +186,7 @@ TARO_APP_GARMENT_GATEWAY_MODE=wechat-cloud npm run build:weapp
 
 2026-08-28 继续使用微信开发者工具中的真实微信身份和官方自动化通道完成两阶段补充验收：创建动作先返回 `queued`，首次查询开始后重新进入首页，页面最终恢复同一个任务、清除设备待确认 jobId，并在本地原图临时文件丢失时正常展示云端结果。随后提交一条继续修改任务，约16.5秒后返回 `refine`，父任务和修改指令正确；同一请求重放仍返回同一个任务。`cloud://` 结果下载248281字节成功，但开发者工具模拟器的 `saveImageToPhotosAlbum` 在20秒内未返回。项目负责人随后改用物理手机执行保存操作并确认成功，因此相册保存已完成真机验收；未提供机型和系统版本，不在此推断。
 
-该轮专用测试产生2条任务、2条幂等记录、4条资产记录和4个云文件；验收后均按精确 ID 永久删除。数据库复查三组记录均为空，云存储复查返回文件不存在；`trial_usage` 当天计数保留，避免通过测试清理重置预算。Fake Provider 的云端基础设施和真机交互闭环至此完成；真实 Qwen/生图 Provider 仍未迁移，不能据此宣称真实模型闭环已经完成。
+该轮专用测试产生2条任务、2条幂等记录、4条资产记录和4个云文件；验收后均按精确 ID 永久删除。数据库复查三组记录均为空，云存储复查返回文件不存在；`trial_usage` 当天计数保留，避免通过测试清理重置预算。Fake Provider 的云端基础设施和真机交互闭环至此完成；该次验收发生时真实 Qwen/生图 Provider 尚未迁移，后续虽然代码迁移完成，仍不能用这次 Fake 记录替代真实模型验收。
 
 同日还完成一次真实云函数中断边界验收：将 Fake Provider 延迟临时调为35秒，在30秒函数执行时限内启动任务，首次状态查询由平台以 `FUNCTIONS_TIME_LIMIT_EXCEEDED` 中断。数据库记录表明 Provider 调用已经开始且 `attempt=1`；租约到期后连续两次查询都返回同一 `GENERATION_EXECUTION_INTERRUPTED`，`retryable=false`，没有生成结果资产或结果文件。这验证了实例中断后不会自动执行第二次 Provider 调用。测试后已把延迟恢复为15秒并重新部署，`garment-api` 状态为 `Active`。
 
@@ -204,3 +206,36 @@ TARO_APP_GARMENT_GATEWAY_MODE=wechat-cloud npm run build:weapp
 - 同一轮还会清理过期的分析、生成任务和幂等记录。`trial_usage` 当前按日期保留，后续扩大试用前再增加独立保留期。
 
 真实环境先完成一次空数据清理，随后上传一张专用验证文件并插入1条已过期的 `garment_assets` 记录。再次手动触发后，函数约778ms返回：发现1条过期资产、删除1个云文件、删除1条资产记录、失败数0。之后按精确文档 ID 查询数据库为空，原云存储路径返回404；该专用测试文件和记录已永久删除。共享文件仍有有效资产引用时不删除物理文件的保护由自动化测试覆盖。
+
+## 11. 真实 Provider 的受预算验收
+
+真实模式代码已复用与 Fastify 相同的 `AlibabaQwenProvider`、`AlibabaQwenImageProvider`、证据门和 Prompt Compiler。当前部署仍为 `fake`，因此以下操作只在准备进行付费真机验收时执行。
+
+先保持 Fake 配置完成构建、检查和代码部署。然后由项目负责人在微信云控制台的 `garment-api` 环境变量中手动增加或更新：
+
+```text
+WECHAT_CLOUD_BUSINESS_PROVIDER=alibaba-qwen
+DASHSCOPE_API_KEY=<只在云控制台填写>
+DASHSCOPE_API_BASE_URL=<百炼 API 地址>
+DASHSCOPE_COMPATIBLE_BASE_URL=<兼容模式地址，可省略且由标准地址推导>
+DASHSCOPE_VISION_MODEL=qwen3.7-plus
+DASHSCOPE_IMAGE_MODEL=qwen-image-2.0-pro-2026-06-22
+DASHSCOPE_ANALYSIS_TIMEOUT_MS=150000
+DASHSCOPE_GENERATION_TIMEOUT_MS=150000
+GENERATION_EXECUTION_LEASE_SECONDS=210
+MAX_REFINEMENT_DEPTH=3
+```
+
+同时把用户和全局的分析/生图日额度设置为“当前已有计数 + 本轮最多调用数”，不要删除或调低既有 `trial_usage` 来绕过预算。本轮完整验收至少需要1次分析、1次首次生成和1次继续修改。Key 不得复制到 `.env.example`、`cloudbaserc.json`、聊天、截图或 Git。
+
+`cloudbaserc.json` 有意保留 `fake` 作为安全部署默认值。真实模式启用后再次运行 CLI 部署可能把开关恢复为 Fake，并可能覆盖控制台环境变量；每次部署后必须在控制台复核 Provider 模式、私密变量、180秒函数上限和210秒租约。不要为了方便把真实 Key 写进部署配置。
+
+真机按以下顺序验收：
+
+1. 使用固定样本执行一次真实分析，确认 Provider/模型是 `alibaba-qwen-vl` / `qwen3.7-plus`，三个方向可选择且水印型号不作为服装事实。
+2. 选择一个方向创建首次生图，确认先拿到同一任务 ID，最终结果由 `alibaba-qwen-image` 转存到 `garment-results/`。
+3. 从最初商品图提交一次继续修改，确认任务标为 `refine`、父任务正确、结果不是对生成图做二次编辑。
+4. 保存结果到物理手机相册，并复核分析、生图各自额度只按实际新请求增加；相同幂等请求不得产生第二次调用。
+5. 记录耗时、厂商请求 ID、标准化用量和错误码；按精确 ID 清理本轮图片和业务记录，但保留 `trial_usage` 计数。
+
+任一步失败都先保留稳定错误码、云函数请求 ID 和任务 ID，不要盲目重复点击。Provider 调用已经开始后的失败或未知状态不会自动重试；是否人工再次付费必须先核对数据库任务和厂商账单。

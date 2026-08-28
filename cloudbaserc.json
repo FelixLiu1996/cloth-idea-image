@@ -6,7 +6,7 @@
       "name": "garment-api",
       "handler": "index.main",
       "runtime": "Nodejs20.19",
-      "timeout": 30,
+      "timeout": 180,
       "memorySize": 256,
       "installDependency": true,
       "triggers": [
@@ -23,7 +23,9 @@
         "TRIAL_GLOBAL_DAILY_ANALYSIS_LIMIT": "100",
         "TRIAL_GLOBAL_DAILY_GENERATION_LIMIT": "200",
         "ASSET_RETENTION_HOURS": "72",
-        "FAKE_GENERATION_DELAY_MS": "15000"
+        "FAKE_GENERATION_DELAY_MS": "15000",
+        "GENERATION_EXECUTION_LEASE_SECONDS": "210",
+        "MAX_REFINEMENT_DEPTH": "3"
       }
     }
   ]

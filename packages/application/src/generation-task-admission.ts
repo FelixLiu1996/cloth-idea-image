@@ -7,6 +7,8 @@ import {
 } from "./errors";
 import type {
   ApplicationTransactionRunner,
+  GarmentAssetRecord,
+  GarmentAssetRepository,
   GenerationTaskAction,
   GenerationTaskRecord,
   GenerationTaskRepository,
@@ -28,6 +30,7 @@ export interface AdmitGenerationTaskInput {
   readonly createdAt: string;
   readonly expiresAt: string;
   readonly quotaReservations: readonly TrialQuotaReservation[];
+  readonly sourceAsset?: GarmentAssetRecord;
 }
 
 export interface AdmitGenerationTaskResult {
@@ -40,6 +43,7 @@ export interface GenerationTaskAdmissionDependencies {
   readonly tasks: GenerationTaskRepository;
   readonly idempotency: IdempotencyRepository;
   readonly quotas: TrialQuotaRepository;
+  readonly assets?: GarmentAssetRepository;
 }
 
 export class GenerationTaskAdmissionService {
@@ -111,6 +115,15 @@ export class GenerationTaskAdmissionService {
         }))
       ) {
         throw new ApplicationStateConflictError("幂等记录已经存在。");
+      }
+      if (input.sourceAsset) {
+        if (!this.dependencies.assets) {
+          throw new ApplicationStateConflictError("任务准入未配置资产仓储。");
+        }
+        if (input.sourceAsset.ownerId !== input.ownerId) {
+          throw new ApplicationStateConflictError("任务与源资产所属用户不一致。");
+        }
+        await this.dependencies.assets.save(input.sourceAsset);
       }
 
       return { task, reused: false };

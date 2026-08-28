@@ -29,8 +29,15 @@ import {
 
 const GENERATION_POLL_INTERVAL_MS = 1_000;
 const GENERATION_POLL_BUDGET_MS = 360_000;
+const retryableCloudTransportCodes = new Set(["CLOUD_FUNCTION_UNAVAILABLE", "BAD_CLOUD_RESPONSE"]);
 
 export type WechatCloudGarmentClient = WechatCloudInfrastructureClient;
+
+interface PendingAnalysisRequest {
+  readonly signature: string;
+  readonly image: WechatCloudSourceImageReference;
+  readonly brief: GarmentAnalysisBrief;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -301,6 +308,8 @@ function configuredClient(): WechatCloudGarmentClient {
 }
 
 export class WechatCloudGarmentGateway implements GarmentGateway {
+  private pendingAnalysisRequest: PendingAnalysisRequest | null = null;
+
   constructor(
     private readonly cloud: WechatCloudGarmentClient = configuredClient(),
     private readonly pendingJobs: PendingGenerationJobStore = pendingGenerationJobStore,
@@ -311,7 +320,12 @@ export class WechatCloudGarmentGateway implements GarmentGateway {
       try {
         return await callGarmentCloudFunction(this.cloud, request);
       } catch (error) {
-        if (!(error instanceof GenerationApiError) || !error.retryable || attempt === 1) {
+        if (
+          !(error instanceof GenerationApiError) ||
+          !error.retryable ||
+          !retryableCloudTransportCodes.has(error.code) ||
+          attempt === 1
+        ) {
           throw error;
         }
         await wait(300);
@@ -425,14 +439,41 @@ export class WechatCloudGarmentGateway implements GarmentGateway {
   }
 
   async analyzeGarment(input: CreateGenerationRequest): Promise<GarmentAnalysisApiResponse> {
-    const image = await this.uploadSource(input.imagePath, imageSize(input));
-    return parseAnalysis(
-      await this.callWithRetry({
-        action: "analyze-garment",
-        ...image,
-        brief: createBrief(input),
-      }),
-    );
+    const brief = createBrief(input);
+    const signature = JSON.stringify({
+      imagePath: input.imagePath,
+      imageSize: imageSize(input),
+      brief,
+    });
+    const pending = this.pendingAnalysisRequest;
+    const image =
+      pending?.signature === signature
+        ? pending.image
+        : await this.uploadSource(input.imagePath, imageSize(input));
+    this.pendingAnalysisRequest = { signature, image, brief };
+    try {
+      const analysis = parseAnalysis(
+        await this.callWithRetry({
+          action: "analyze-garment",
+          ...image,
+          brief,
+        }),
+      );
+      this.pendingAnalysisRequest = null;
+      return analysis;
+    } catch (error) {
+      if (
+        !(error instanceof GenerationApiError) ||
+        ![
+          "CLOUD_FUNCTION_UNAVAILABLE",
+          "BAD_CLOUD_RESPONSE",
+          "ANALYSIS_EXECUTION_IN_PROGRESS",
+        ].includes(error.code)
+      ) {
+        this.pendingAnalysisRequest = null;
+      }
+      throw error;
+    }
   }
 
   async createGeneration(input: CreateGenerationRequest): Promise<GenerationApiResponse> {

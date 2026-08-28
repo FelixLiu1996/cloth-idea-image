@@ -13,6 +13,7 @@ import {
 import { WechatCloudGarmentAssetStorage } from "./cloud-asset-storage";
 import { createGarmentCloudBusinessHandler, isWechatCloudBusinessAction } from "./business-handler";
 import { createGarmentCleanupHandler, isGarmentCleanupTimerEvent } from "./cleanup-handler";
+import { createGarmentCloudProviderConfiguration } from "./provider-config";
 
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV as unknown as string });
 
@@ -69,7 +70,14 @@ const trialLimits = {
     "FAKE_GENERATION_DELAY_MS",
     process.env.WECHAT_CLOUD_BUSINESS_PROVIDER === "fake" ? 15_000 : 0,
   ),
+  executionLeaseSeconds: readPositiveInteger(
+    "GENERATION_EXECUTION_LEASE_SECONDS",
+    process.env.WECHAT_CLOUD_BUSINESS_PROVIDER === "alibaba-qwen" ? 210 : 60,
+  ),
+  maxRefinementDepth: readPositiveInteger("MAX_REFINEMENT_DEPTH", 3),
 } as const;
+
+const providerConfiguration = createGarmentCloudProviderConfiguration();
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -165,7 +173,11 @@ const businessHandler = createGarmentCloudBusinessHandler({
   isTrialMember,
   persistence: applicationPersistence,
   storage: garmentAssetStorage,
-  fakeProviderEnabled: process.env.WECHAT_CLOUD_BUSINESS_PROVIDER === "fake",
+  providerMode: providerConfiguration.mode,
+  analysisProvider: providerConfiguration.analysisProvider,
+  imageProvider: providerConfiguration.imageProvider,
+  providerConfigurationError: providerConfiguration.configurationError,
+  logEvent: (event) => console.info(JSON.stringify(event)),
   now: () => new Date().toISOString(),
   createRequestId: createDefaultRequestId,
   trialDailyAnalysisLimit: trialLimits.analysis,
@@ -173,7 +185,9 @@ const businessHandler = createGarmentCloudBusinessHandler({
   globalDailyAnalysisLimit: trialLimits.globalAnalysis,
   globalDailyGenerationLimit: trialLimits.globalGeneration,
   assetRetentionHours: trialLimits.retentionHours,
+  executionLeaseSeconds: trialLimits.executionLeaseSeconds,
   fakeGenerationDelayMs: trialLimits.fakeGenerationDelayMs,
+  maxRefinementDepth: trialLimits.maxRefinementDepth,
 });
 
 const cleanupHandler = createGarmentCleanupHandler({

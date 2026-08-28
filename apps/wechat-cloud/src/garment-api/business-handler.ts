@@ -15,6 +15,12 @@ import {
   type ApplicationTransactionRunner,
 } from "@cloth-idea/application";
 import {
+  applyEvidenceGate,
+  buildGarmentPrompt,
+  compileAnalyzedGarmentPrompt,
+  compileGarmentIterationPrompt,
+  createGenerationSummary,
+  findDesignDirection,
   garmentAnalysisSchema,
   supportedImageMimeTypes,
   type ApiErrorResponse,
@@ -24,16 +30,27 @@ import {
   type GarmentAnalysis,
   type GarmentAnalysisApiResponse,
   type GarmentAnalysisBrief,
+  type GarmentAnalysisProviderResult,
+  type GarmentGenerationInput,
+  type GarmentGenerationResult,
   type GenerationApiResponse,
   type GenerationJobFailedResponse,
   type GenerationJobStatusResponse,
+  type GenerationPromptVersion,
+  type SourceImageInput,
   type SupportedImageMimeType,
   type WechatCloudBusinessRequest,
   type WechatCloudResponse,
   type WechatCloudSourceImageReference,
 } from "@cloth-idea/domain";
+import {
+  GarmentProviderError,
+  type GarmentAnalysisProvider,
+  type GarmentImageProvider,
+} from "@cloth-idea/model-providers";
 
 import type { WechatCloudGarmentAssetStorage } from "./cloud-asset-storage";
+import type { GarmentCloudBusinessProviderMode } from "./provider-config";
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const allowedMimeTypes = new Set<string>(supportedImageMimeTypes);
@@ -58,7 +75,11 @@ export interface GarmentCloudBusinessHandlerDependencies {
   readonly isTrialMember: (viewerFingerprint: string) => Promise<boolean>;
   readonly persistence: GarmentCloudBusinessPersistence;
   readonly storage: Pick<WechatCloudGarmentAssetStorage, "read" | "save">;
-  readonly fakeProviderEnabled: boolean;
+  readonly providerMode: GarmentCloudBusinessProviderMode;
+  readonly analysisProvider?: GarmentAnalysisProvider | null;
+  readonly imageProvider?: GarmentImageProvider | null;
+  readonly providerConfigurationError?: string | null;
+  readonly logEvent?: (event: Readonly<Record<string, unknown>>) => void;
   readonly now: () => string;
   readonly createResourceId?: () => string;
   readonly createRequestId?: () => string;
@@ -69,6 +90,7 @@ export interface GarmentCloudBusinessHandlerDependencies {
   readonly assetRetentionHours: number;
   readonly executionLeaseSeconds?: number;
   readonly fakeGenerationDelayMs?: number;
+  readonly maxRefinementDepth?: number;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -77,6 +99,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function hash(value: string, length = 64): string {
   return createHash("sha256").update(value).digest("hex").slice(0, length);
+}
+
+function hashBytes(value: Uint8Array): string {
+  return createHash("sha256").update(value).digest("hex");
 }
 
 function viewerFingerprint(openId: string): string {
@@ -414,18 +440,27 @@ async function analyze(
       now,
     );
     if (!existing) {
-      throw new ApplicationStateConflictError("幂等记录绑定的分析结果不存在或已经过期。");
+      throw new AnalysisExecutionStateError(
+        Date.parse(now) - Date.parse(existingIdempotency.createdAt) < 180_000
+          ? "ANALYSIS_EXECUTION_IN_PROGRESS"
+          : "ANALYSIS_EXECUTION_INTERRUPTED",
+      );
     }
     return existing.response;
+  }
+  const providerMode = dependencies.providerMode;
+  if (providerMode === "disabled") {
+    throw new ProviderConfigurationChangedError();
   }
   const bytes = await dependencies.storage.read(request.cloudFileId);
   if (bytes.byteLength !== request.size) {
     throw new Error("uploaded image size mismatch");
   }
-  const imageSha256 = hash(Buffer.from(bytes).toString("base64"));
+  const imageSha256 = hashBytes(bytes);
   const expiresAt = addHours(now, dependencies.assetRetentionHours);
+  const proposedAnalysisId = (dependencies.createResourceId ?? randomUUID)();
 
-  return dependencies.persistence.transactions.run(async () => {
+  const admission = await dependencies.persistence.transactions.run(async () => {
     const existingIdempotency = await dependencies.persistence.idempotency.find(
       ownerId,
       "analysis",
@@ -442,9 +477,13 @@ async function analyze(
         now,
       );
       if (!existing) {
-        throw new ApplicationStateConflictError("幂等记录绑定的分析结果不存在或已经过期。");
+        throw new AnalysisExecutionStateError(
+          Date.parse(now) - Date.parse(existingIdempotency.createdAt) < 180_000
+            ? "ANALYSIS_EXECUTION_IN_PROGRESS"
+            : "ANALYSIS_EXECUTION_INTERRUPTED",
+        );
       }
-      return existing.response;
+      return { reused: true as const, response: existing.response };
     }
 
     const quota = await dependencies.persistence.quotas.reserveMany(
@@ -454,18 +493,8 @@ async function analyze(
       throw new TrialQuotaExceededError(quota.denied);
     }
 
-    const analysisId = (dependencies.createResourceId ?? randomUUID)();
-    const response: GarmentAnalysisApiResponse = {
-      analysisId,
-      status: "succeeded",
-      provider: "testing-fake",
-      model: "fake-garment-analysis-v1",
-      durationMs: 0,
-      analysis: createFakeAnalysis(request.brief),
-      evidenceSummary: { accepted: 0, needsReview: 0, unknown: 16 },
-    };
     await dependencies.persistence.assets.save({
-      assetId: `analysis-source-${analysisId}`,
+      assetId: `analysis-source-${proposedAnalysisId}`,
       ownerId,
       kind: "source",
       fileId: request.cloudFileId,
@@ -474,31 +503,107 @@ async function analyze(
       createdAt: now,
       expiresAt,
     });
-    await dependencies.persistence.analyses.save({
-      analysisId,
-      ownerId,
-      response,
-      sourceImageSha256: imageSha256,
-      expiresAt,
-    });
     if (
       !(await dependencies.persistence.idempotency.create({
         ownerId,
         action: "analysis",
         key: request.idempotencyKey,
         requestFingerprint: fingerprint,
-        resourceId: analysisId,
+        resourceId: proposedAnalysisId,
         createdAt: now,
         expiresAt,
       }))
     ) {
       throw new ApplicationStateConflictError("分析幂等记录已经存在。");
     }
-    return response;
+    return { reused: false as const, response: null };
+  });
+
+  if (admission.reused) {
+    return admission.response;
+  }
+
+  const providerResult = await runAnalysisProvider(dependencies, request, bytes);
+  const evidence = applyEvidenceGate(providerResult.analysis.visualFacts);
+  const response: GarmentAnalysisApiResponse = {
+    analysisId: proposedAnalysisId,
+    status: "succeeded",
+    provider: providerResult.provider,
+    model: providerResult.model,
+    durationMs: providerResult.durationMs,
+    analysis: providerResult.analysis,
+    evidenceSummary: {
+      accepted: evidence.accepted.length,
+      needsReview: evidence.needsReview.length,
+      unknown: evidence.unknown.length,
+    },
+  };
+  await dependencies.persistence.analyses.save({
+    analysisId: proposedAnalysisId,
+    ownerId,
+    response,
+    sourceImageSha256: imageSha256,
+    expiresAt,
+  });
+  dependencies.logEvent?.({
+    event: "garment-analysis-completed",
+    analysisId: proposedAnalysisId,
+    provider: providerResult.provider,
+    model: providerResult.model,
+    providerRequestId: providerResult.providerRequestId,
+    durationMs: providerResult.durationMs,
+    attemptCount: providerResult.attemptCount,
+    usage: providerResult.usage,
+  });
+  return response;
+}
+
+class AnalysisExecutionStateError extends Error {
+  constructor(readonly code: "ANALYSIS_EXECUTION_IN_PROGRESS" | "ANALYSIS_EXECUTION_INTERRUPTED") {
+    super(code);
+    this.name = "AnalysisExecutionStateError";
+  }
+}
+
+async function runAnalysisProvider(
+  dependencies: GarmentCloudBusinessHandlerDependencies,
+  request: CreateWechatCloudGarmentAnalysisRequest,
+  bytes: Uint8Array,
+): Promise<GarmentAnalysisProviderResult> {
+  if (dependencies.providerMode === "fake") {
+    return {
+      provider: "testing-fake",
+      model: "fake-garment-analysis-v1",
+      providerRequestId: null,
+      durationMs: 0,
+      attemptCount: 1,
+      usage: {
+        generatedImages: 0,
+        inputTokens: null,
+        outputTokens: null,
+        totalTokens: null,
+        size: null,
+      },
+      analysis: createFakeAnalysis(request.brief),
+    };
+  }
+  if (dependencies.providerMode !== "alibaba-qwen" || !dependencies.analysisProvider?.configured) {
+    throw new ProviderConfigurationChangedError();
+  }
+  return dependencies.analysisProvider.analyze({
+    sourceImage: {
+      bytes,
+      fileName: request.fileName,
+      mimeType: request.mimeType,
+    },
+    brief: request.brief,
+    schemaVersion: "garment-dna-v0.2",
   });
 }
 
-interface FakeGenerationContext {
+type ExecutableProviderMode = Exclude<GarmentCloudBusinessProviderMode, "disabled">;
+
+interface GarmentGenerationContext {
   readonly strategy: "direct" | "analyzed";
   readonly directionId: string | null;
   readonly directionName: string | null;
@@ -506,22 +611,38 @@ interface FakeGenerationContext {
   readonly operation: "initial" | "regenerate" | "refine";
   readonly parentJobId: string | null;
   readonly revisionInstruction: string | null;
+  readonly prompt: string;
+  readonly promptVersion: GenerationPromptVersion;
+  readonly basePrompt: string;
+  readonly baseSummary: string;
+  readonly baseRequestFingerprint: string;
+  readonly sourceImageSha256: string;
+  readonly revisionInstructions: readonly string[];
 }
 
-interface FakeGenerationExecutionPayload {
-  readonly version: "fake-generation-v1";
+interface GarmentGenerationExecutionPayload {
+  readonly version: "garment-generation-v2";
+  readonly providerMode: ExecutableProviderMode;
   readonly source: WechatCloudSourceImageReference;
-  readonly context: FakeGenerationContext;
+  readonly context: GarmentGenerationContext;
 }
 
 class InvalidGenerationExecutionPayloadError extends Error {}
+class ProviderConfigurationChangedError extends Error {}
 
 async function resolveGenerationContext(
   dependencies: GarmentCloudBusinessHandlerDependencies,
   ownerId: string,
   request: CreateWechatCloudGenerationRequest | CreateWechatCloudRefinementRequest,
   now: string,
-): Promise<FakeGenerationContext> {
+  bytes: Uint8Array,
+): Promise<GarmentGenerationContext> {
+  const sourceImage: SourceImageInput = {
+    bytes,
+    fileName: request.fileName,
+    mimeType: request.mimeType,
+  };
+  const sourceImageSha256 = hashBytes(bytes);
   if (request.action === "create-refinement") {
     if (request.instruction.trim().length < 2 || request.instruction.length > 500) {
       throw new RangeError("修改要求格式不正确。");
@@ -530,20 +651,55 @@ async function resolveGenerationContext(
     if (!parent || parent.status.status !== "succeeded") {
       throw new RangeError("没有找到可以继续修改的上一版结果。");
     }
+    const parentPayload = parseGenerationExecutionPayload(parent.executionPayload);
+    if (!parentPayload || parentPayload.providerMode !== dependencies.providerMode) {
+      throw new RangeError("上一版结果来自其他 Provider，请从当前原图重新生成后再继续修改。");
+    }
+    if (parentPayload.context.sourceImageSha256 !== sourceImageSha256) {
+      throw new RangeError("当前原图与生成分支不一致，无法继续修改。");
+    }
+    if (
+      parentPayload.context.revisionInstructions.length >= (dependencies.maxRefinementDepth ?? 3)
+    ) {
+      throw new RangeError("当前分支已达到继续修改次数上限，请从原图重新生成。");
+    }
+    const revisionInstructions = [
+      ...parentPayload.context.revisionInstructions,
+      request.instruction.trim(),
+    ];
     return {
       strategy: parent.status.strategy,
       directionId: parent.status.directionId,
       directionName: parent.status.directionName,
-      summary: `${parent.status.summary} · 继续修改：${request.instruction.trim()}`,
+      summary: `${parentPayload.context.baseSummary} · 继续修改：${request.instruction.trim()}`,
       operation: "refine" as const,
       parentJobId: parent.jobId,
       revisionInstruction: request.instruction.trim(),
+      prompt: compileGarmentIterationPrompt({
+        basePrompt: parentPayload.context.basePrompt,
+        revisionInstructions,
+        usesOriginalSourceImage: true,
+      }),
+      promptVersion: "garment-iteration-v1",
+      basePrompt: parentPayload.context.basePrompt,
+      baseSummary: parentPayload.context.baseSummary,
+      baseRequestFingerprint: parentPayload.context.baseRequestFingerprint,
+      sourceImageSha256,
+      revisionInstructions,
     };
   }
 
   if ((request.analysisId === undefined) !== (request.directionId === undefined)) {
     throw new RangeError("分析结果和设计方向必须同时提供。");
   }
+  const analyzed = Boolean(request.analysisId && request.directionId);
+  const generationInput: GarmentGenerationInput = {
+    ...request.brief,
+    sourceImage,
+    outputCount: 1,
+    promptVersion: analyzed ? "garment-analysis-v1" : "garment-redesign-v1",
+  };
+  let prompt = buildGarmentPrompt(generationInput);
   let directionName: string | null = null;
   if (request.analysisId && request.directionId) {
     const analysis = await dependencies.persistence.analyses.findById(
@@ -551,28 +707,67 @@ async function resolveGenerationContext(
       request.analysisId,
       now,
     );
-    const direction = analysis?.response.analysis.designDirections.find(
-      (candidate) => candidate.id === request.directionId,
-    );
+    const direction = analysis
+      ? findDesignDirection(analysis.response.analysis, request.directionId)
+      : null;
     if (!analysis || !direction) {
       throw new RangeError("分析结果或设计方向不存在或已经过期。");
     }
+    const legacySourceImageSha256 = hash(Buffer.from(bytes).toString("base64"));
+    if (
+      analysis.sourceImageSha256 !== sourceImageSha256 &&
+      analysis.sourceImageSha256 !== legacySourceImageSha256
+    ) {
+      throw new RangeError("当前图片与服装分析不一致，请重新分析。");
+    }
     directionName = direction.name;
+    prompt = compileAnalyzedGarmentPrompt({
+      request: generationInput,
+      analysis: analysis.response.analysis,
+      direction,
+    });
   }
+  const baseSummary = createGenerationSummary(generationInput);
+  const summary = `${directionName ? `${baseSummary} · ${directionName}` : baseSummary}${
+    dependencies.providerMode === "fake" ? " · Fake Provider 链路验证" : ""
+  }`;
+  const baseRequestFingerprint = hash(
+    JSON.stringify({
+      sourceImageSha256,
+      brief: request.brief,
+      analysisId: request.analysisId ?? null,
+      directionId: request.directionId ?? null,
+    }),
+  );
   if (request.parentJobId) {
     const parent = await dependencies.persistence.tasks.findById(ownerId, request.parentJobId, now);
     if (!parent || parent.status.status !== "succeeded") {
       throw new RangeError("没有找到用于再次生成的上一版结果。");
     }
+    const parentPayload = parseGenerationExecutionPayload(parent.executionPayload);
+    if (
+      !parentPayload ||
+      parentPayload.providerMode !== dependencies.providerMode ||
+      parentPayload.context.baseRequestFingerprint !== baseRequestFingerprint
+    ) {
+      throw new RangeError("上一张结果与当前原图、设计方向或 Provider 不一致。");
+    }
   }
   return {
-    strategy: request.analysisId ? ("analyzed" as const) : ("direct" as const),
+    strategy: analyzed ? ("analyzed" as const) : ("direct" as const),
     directionId: request.directionId ?? null,
     directionName,
-    summary: `${request.brief.mode === "inspiration" ? "灵感设计" : "快速衍生"} · Fake Provider 链路验证 · ${request.brief.styleDirection.trim()}`,
+    summary,
     operation: request.parentJobId ? ("regenerate" as const) : ("initial" as const),
     parentJobId: request.parentJobId ?? null,
     revisionInstruction: null,
+    prompt,
+    promptVersion: generationInput.promptVersion,
+    basePrompt: prompt,
+    baseSummary: summary,
+    baseRequestFingerprint,
+    sourceImageSha256,
+    revisionInstructions: [],
   };
 }
 
@@ -580,10 +775,11 @@ function parseNullableString(value: unknown): string | null | undefined {
   return value === null ? null : typeof value === "string" ? value : undefined;
 }
 
-function parseGenerationExecutionPayload(value: unknown): FakeGenerationExecutionPayload | null {
+function parseGenerationExecutionPayload(value: unknown): GarmentGenerationExecutionPayload | null {
   if (
     !isRecord(value) ||
-    value.version !== "fake-generation-v1" ||
+    value.version !== "garment-generation-v2" ||
+    (value.providerMode !== "fake" && value.providerMode !== "alibaba-qwen") ||
     !isRecord(value.source) ||
     !isRecord(value.context)
   ) {
@@ -594,6 +790,11 @@ function parseGenerationExecutionPayload(value: unknown): FakeGenerationExecutio
   const directionName = parseNullableString(value.context.directionName);
   const parentJobId = parseNullableString(value.context.parentJobId);
   const revisionInstruction = parseNullableString(value.context.revisionInstruction);
+  const promptVersions = new Set<string>([
+    "garment-redesign-v1",
+    "garment-analysis-v1",
+    "garment-iteration-v1",
+  ]);
   if (
     !source ||
     (value.context.strategy !== "direct" && value.context.strategy !== "analyzed") ||
@@ -605,12 +806,36 @@ function parseGenerationExecutionPayload(value: unknown): FakeGenerationExecutio
       value.context.operation !== "regenerate" &&
       value.context.operation !== "refine") ||
     parentJobId === undefined ||
-    revisionInstruction === undefined
+    revisionInstruction === undefined ||
+    typeof value.context.prompt !== "string" ||
+    value.context.prompt.length < 1 ||
+    value.context.prompt.length > 40_000 ||
+    typeof value.context.promptVersion !== "string" ||
+    !promptVersions.has(value.context.promptVersion) ||
+    typeof value.context.basePrompt !== "string" ||
+    value.context.basePrompt.length < 1 ||
+    value.context.basePrompt.length > 40_000 ||
+    typeof value.context.baseSummary !== "string" ||
+    value.context.baseSummary.length < 1 ||
+    value.context.baseSummary.length > 2_000 ||
+    typeof value.context.baseRequestFingerprint !== "string" ||
+    !/^[a-f0-9]{64}$/.test(value.context.baseRequestFingerprint) ||
+    typeof value.context.sourceImageSha256 !== "string" ||
+    !/^[a-f0-9]{64}$/.test(value.context.sourceImageSha256) ||
+    !Array.isArray(value.context.revisionInstructions) ||
+    value.context.revisionInstructions.length > 12 ||
+    !value.context.revisionInstructions.every(
+      (instruction) =>
+        typeof instruction === "string" &&
+        instruction.trim().length >= 2 &&
+        instruction.length <= 500,
+    )
   ) {
     return null;
   }
   return {
     version: value.version,
+    providerMode: value.providerMode,
     source,
     context: {
       strategy: value.context.strategy,
@@ -620,16 +845,25 @@ function parseGenerationExecutionPayload(value: unknown): FakeGenerationExecutio
       operation: value.context.operation,
       parentJobId,
       revisionInstruction,
+      prompt: value.context.prompt,
+      promptVersion: value.context.promptVersion as GenerationPromptVersion,
+      basePrompt: value.context.basePrompt,
+      baseSummary: value.context.baseSummary,
+      baseRequestFingerprint: value.context.baseRequestFingerprint,
+      sourceImageSha256: value.context.sourceImageSha256,
+      revisionInstructions: value.context.revisionInstructions as string[],
     },
   };
 }
 
-function fakeExecutionPayload(
+function generationExecutionPayload(
+  providerMode: ExecutableProviderMode,
   request: CreateWechatCloudGenerationRequest | CreateWechatCloudRefinementRequest,
-  context: FakeGenerationContext,
-): FakeGenerationExecutionPayload {
+  context: GarmentGenerationContext,
+): GarmentGenerationExecutionPayload {
   return {
-    version: "fake-generation-v1",
+    version: "garment-generation-v2",
+    providerMode,
     source: {
       idempotencyKey: request.idempotencyKey,
       cloudFileId: request.cloudFileId,
@@ -649,23 +883,20 @@ async function completeFailedGeneration(
   error: unknown,
 ): Promise<GenerationJobStatusResponse> {
   const completedAt = dependencies.now();
-  const invalidPayload = error instanceof InvalidGenerationExecutionPayloadError;
+  const normalized = normalizeGenerationFailure(dependencies, error);
   const failed: GenerationJobFailedResponse = {
     jobId: task.jobId,
     status: "failed",
-    error: {
-      code: invalidPayload
-        ? "GENERATION_EXECUTION_PAYLOAD_INVALID"
-        : "FAKE_PROVIDER_EXECUTION_FAILED",
-      message: invalidPayload
-        ? "生成任务执行数据无效，请重新提交。"
-        : "测试生图任务执行失败，请稍后重试。",
-      requestId: (dependencies.createRequestId ?? randomUUID)(),
-      retryable: !invalidPayload,
-    },
+    error: normalized,
     createdAt: task.createdAt,
     updatedAt: completedAt,
   };
+  dependencies.logEvent?.({
+    event: "garment-generation-failed",
+    jobId: task.jobId,
+    code: normalized.code,
+    retryable: normalized.retryable,
+  });
   const execution = new GenerationTaskExecutionService(dependencies.persistence);
   try {
     return (
@@ -683,6 +914,91 @@ async function completeFailedGeneration(
       failed
     );
   }
+}
+
+function normalizeGenerationFailure(
+  dependencies: GarmentCloudBusinessHandlerDependencies,
+  error: unknown,
+): ApiErrorResponse {
+  if (error instanceof InvalidGenerationExecutionPayloadError) {
+    return {
+      code: "GENERATION_EXECUTION_PAYLOAD_INVALID",
+      message: "生成任务执行数据无效，请重新提交。",
+      requestId: (dependencies.createRequestId ?? randomUUID)(),
+      retryable: false,
+    };
+  }
+  if (error instanceof ProviderConfigurationChangedError) {
+    return {
+      code: "CLOUD_BACKEND_NOT_DEPLOYED",
+      message: "任务创建后云端 Provider 配置发生变化，已停止执行以避免错误计费。",
+      requestId: (dependencies.createRequestId ?? randomUUID)(),
+      retryable: false,
+    };
+  }
+  if (error instanceof GarmentProviderError) {
+    return {
+      code: error.code,
+      message: error.message,
+      requestId: error.requestId ?? (dependencies.createRequestId ?? randomUUID)(),
+      retryable: error.retryable,
+    };
+  }
+  return {
+    code:
+      dependencies.providerMode === "fake"
+        ? "FAKE_PROVIDER_EXECUTION_FAILED"
+        : "GENERATION_PROVIDER_EXECUTION_FAILED",
+    message:
+      dependencies.providerMode === "fake"
+        ? "测试生图任务执行失败，请稍后重试。"
+        : "生图任务执行失败，系统没有自动重复调用模型。",
+    requestId: (dependencies.createRequestId ?? randomUUID)(),
+    retryable: true,
+  };
+}
+
+async function runImageProvider(
+  dependencies: GarmentCloudBusinessHandlerDependencies,
+  payload: GarmentGenerationExecutionPayload,
+  bytes: Uint8Array,
+): Promise<GarmentGenerationResult> {
+  if (payload.providerMode !== dependencies.providerMode) {
+    throw new ProviderConfigurationChangedError();
+  }
+  if (payload.providerMode === "fake") {
+    const delayMs = dependencies.fakeGenerationDelayMs ?? 0;
+    if (delayMs > 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    }
+    return {
+      provider: "testing-fake",
+      model: "fake-image-copy-v1",
+      providerRequestId: null,
+      durationMs: delayMs,
+      assets: [{ bytes, mimeType: payload.source.mimeType }],
+      usage: {
+        generatedImages: 1,
+        inputTokens: null,
+        outputTokens: null,
+        totalTokens: null,
+        size: null,
+      },
+    };
+  }
+  if (!dependencies.imageProvider?.configured) {
+    throw new ProviderConfigurationChangedError();
+  }
+  return dependencies.imageProvider.generateVariation({
+    sourceImage: {
+      bytes,
+      fileName: payload.source.fileName,
+      mimeType: payload.source.mimeType,
+    },
+    prompt: payload.context.prompt,
+    outputCount: 1,
+    promptVersion: payload.context.promptVersion,
+  });
 }
 
 async function executeGenerationTask(
@@ -714,6 +1030,9 @@ async function executeGenerationTask(
     if (bytes.byteLength !== payload.source.size) {
       throw new Error("uploaded image size mismatch");
     }
+    if (hashBytes(bytes) !== payload.context.sourceImageSha256) {
+      throw new InvalidGenerationExecutionPayloadError();
+    }
     await dependencies.persistence.assets.save({
       assetId: `source-${jobId}`,
       ownerId,
@@ -730,16 +1049,17 @@ async function executeGenerationTask(
       leaseId,
       now: dependencies.now(),
     });
-    const delayMs = dependencies.fakeGenerationDelayMs ?? 0;
-    if (delayMs > 0) {
-      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    const providerResult = await runImageProvider(dependencies, payload, bytes);
+    const firstAsset = providerResult.assets[0];
+    if (!firstAsset) {
+      throw new GarmentProviderError("PROVIDER_BAD_RESPONSE", "生图结果中没有图片。");
     }
     const savedResult = await dependencies.storage.save({
       ownerId,
       assetId: `result-${jobId}`,
       kind: "result",
-      mimeType: payload.source.mimeType,
-      bytes,
+      mimeType: firstAsset.mimeType,
+      bytes: firstAsset.bytes,
     });
     const completedAt = dependencies.now();
     await dependencies.persistence.assets.save({
@@ -747,7 +1067,7 @@ async function executeGenerationTask(
       ownerId,
       kind: "result",
       fileId: savedResult.fileId,
-      mimeType: payload.source.mimeType,
+      mimeType: firstAsset.mimeType,
       size: savedResult.size,
       createdAt: completedAt,
       expiresAt: claim.task.expiresAt,
@@ -755,11 +1075,11 @@ async function executeGenerationTask(
     const succeeded: GenerationApiResponse = {
       jobId,
       status: "succeeded",
-      provider: "testing-fake",
-      model: "fake-image-copy-v1",
+      provider: providerResult.provider,
+      model: providerResult.model,
       resultUrl: savedResult.fileId,
       summary: payload.context.summary,
-      durationMs: Math.max(0, Date.parse(completedAt) - Date.parse(now)),
+      durationMs: providerResult.durationMs,
       strategy: payload.context.strategy,
       directionId: payload.context.directionId,
       directionName: payload.context.directionName,
@@ -768,6 +1088,17 @@ async function executeGenerationTask(
       revisionInstruction: payload.context.revisionInstruction,
       createdAt: claim.task.createdAt,
     };
+    dependencies.logEvent?.({
+      event: "garment-generation-completed",
+      jobId,
+      provider: providerResult.provider,
+      model: providerResult.model,
+      providerRequestId: providerResult.providerRequestId,
+      durationMs: providerResult.durationMs,
+      usage: providerResult.usage,
+      promptVersion: payload.context.promptVersion,
+      operation: payload.context.operation,
+    });
     return (
       await execution.complete({
         ownerId,
@@ -811,7 +1142,15 @@ async function createGeneration(
     return existingTask.status;
   }
 
-  const context = await resolveGenerationContext(dependencies, ownerId, request, now);
+  const providerMode = dependencies.providerMode;
+  if (providerMode === "disabled") {
+    throw new ProviderConfigurationChangedError();
+  }
+  const bytes = await dependencies.storage.read(request.cloudFileId);
+  if (bytes.byteLength !== request.size) {
+    throw new Error("uploaded image size mismatch");
+  }
+  const context = await resolveGenerationContext(dependencies, ownerId, request, now, bytes);
   const proposedJobId = (dependencies.createResourceId ?? randomUUID)();
   const expiresAt = addHours(now, dependencies.assetRetentionHours);
   const admission = await new GenerationTaskAdmissionService(dependencies.persistence).admit({
@@ -819,12 +1158,22 @@ async function createGeneration(
     action,
     idempotencyKey: request.idempotencyKey,
     requestFingerprint: fingerprint,
-    executionPayload: fakeExecutionPayload(request, context),
+    executionPayload: generationExecutionPayload(providerMode, request, context),
     jobId: proposedJobId,
     statusUrl: `wechat-cloud://generation-jobs/${proposedJobId}`,
     createdAt: now,
     expiresAt,
     quotaReservations: quotaReservations(dependencies, ownerId, "generation", now),
+    sourceAsset: {
+      assetId: `source-${proposedJobId}`,
+      ownerId,
+      kind: "source",
+      fileId: request.cloudFileId,
+      mimeType: request.mimeType,
+      size: request.size,
+      createdAt: now,
+      expiresAt,
+    },
   });
   return admission.task.status;
 }
@@ -840,6 +1189,27 @@ function mapKnownError(
     return apiError(dependencies, "IDEMPOTENCY_KEY_CONFLICT", error.message, false);
   }
   if (error instanceof ApplicationStateConflictError) {
+    return apiError(dependencies, error.code, error.message, false);
+  }
+  if (error instanceof ProviderConfigurationChangedError) {
+    return apiError(
+      dependencies,
+      "CLOUD_BACKEND_NOT_DEPLOYED",
+      dependencies.providerConfigurationError ?? "微信云端业务 Provider 尚未启用。",
+      false,
+    );
+  }
+  if (error instanceof AnalysisExecutionStateError) {
+    return apiError(
+      dependencies,
+      error.code,
+      error.code === "ANALYSIS_EXECUTION_IN_PROGRESS"
+        ? "同一分析请求仍在云端执行，请稍后重试。"
+        : "分析执行可能在模型调用后中断，已停止自动重试以避免重复计费。",
+      error.code === "ANALYSIS_EXECUTION_IN_PROGRESS",
+    );
+  }
+  if (error instanceof GarmentProviderError) {
     return apiError(dependencies, error.code, error.message, false);
   }
   if (error instanceof RangeError) {
@@ -881,14 +1251,6 @@ export function createGarmentCloudBusinessHandler(
           dependencies,
           "AUTH_TRIAL_MEMBER_REQUIRED",
           "当前微信账号尚未加入体验名单。",
-          false,
-        );
-      }
-      if (!dependencies.fakeProviderEnabled) {
-        return apiError(
-          dependencies,
-          "CLOUD_BACKEND_NOT_DEPLOYED",
-          "微信云端业务 Provider 尚未启用。",
           false,
         );
       }

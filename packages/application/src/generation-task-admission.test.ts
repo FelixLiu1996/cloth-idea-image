@@ -7,6 +7,7 @@ import {
   TrialQuotaExceededError,
 } from "./index";
 import {
+  MemoryGarmentAssetRepository,
   MemoryGenerationTaskRepository,
   MemoryIdempotencyRepository,
   MemoryTransactionRunner,
@@ -21,8 +22,10 @@ function createHarness() {
   const tasks = new MemoryGenerationTaskRepository();
   const idempotency = new MemoryIdempotencyRepository();
   const quotas = new MemoryTrialQuotaRepository();
-  const transactions = new MemoryTransactionRunner([tasks, idempotency, quotas]);
+  const assets = new MemoryGarmentAssetRepository();
+  const transactions = new MemoryTransactionRunner([tasks, idempotency, quotas, assets]);
   return {
+    assets,
     tasks,
     idempotency,
     quotas,
@@ -30,10 +33,11 @@ function createHarness() {
       tasks,
       idempotency,
       quotas,
+      assets,
       transactions,
     }),
     recreateService: () =>
-      new GenerationTaskAdmissionService({ tasks, idempotency, quotas, transactions }),
+      new GenerationTaskAdmissionService({ tasks, idempotency, quotas, assets, transactions }),
   };
 }
 
@@ -100,6 +104,26 @@ describe("GenerationTaskAdmissionService", () => {
     await expect(
       harness.tasks.findById(result.task.ownerId, result.task.jobId, createdAt),
     ).resolves.toMatchObject({ executionPayload: { version: 1 } });
+  });
+
+  it("registers the uploaded source asset in the same admission transaction", async () => {
+    const harness = createHarness();
+    const sourceAsset = {
+      assetId: "source-00000000-0000-4000-8000-000000000001",
+      ownerId: "viewer-a",
+      kind: "source" as const,
+      fileId: "cloud://env/garment-source-temp/viewer-a/source.jpg",
+      mimeType: "image/jpeg" as const,
+      size: 3,
+      createdAt,
+      expiresAt,
+    };
+
+    await harness.service.admit(input({ sourceAsset }));
+
+    await expect(
+      harness.assets.findById(sourceAsset.ownerId, sourceAsset.assetId, createdAt),
+    ).resolves.toEqual(sourceAsset);
   });
 
   it("serializes concurrent retries and returns the same task without double charging quota", async () => {

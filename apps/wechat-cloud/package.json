@@ -9,7 +9,8 @@
   },
   "dependencies": {
     "@cloth-idea/application": "*",
-    "@cloth-idea/domain": "*"
+    "@cloth-idea/domain": "*",
+    "@cloth-idea/model-providers": "*"
   },
   "devDependencies": {
     "wx-server-sdk": "4.0.2"
