@@ -991,14 +991,41 @@ $studio-sage-soft: #edf1ec;
   padding: 0 24px;
 }
 
+.comparison-grid--pair {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
 .comparison-item {
   border: 1px solid $studio-line;
   border-radius: 9px;
   background: #ebeae6;
 }
 
+.comparison-item--current {
+  border-color: #caa99b;
+}
+
+.comparison-item-label {
+  display: block;
+  padding: 11px 14px;
+  border-bottom: 1px solid $studio-line;
+  background: $studio-paper;
+  color: $studio-muted;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.comparison-item--current .comparison-item-label {
+  color: $studio-accent;
+}
+
 .comparison-image {
   height: 760px;
+}
+
+.comparison-grid--pair .comparison-image {
+  height: 540px;
 }
 
 .result-meta {
@@ -1012,6 +1039,105 @@ $studio-sage-soft: #edf1ec;
   grid-template-columns: 1.15fr 1fr 1fr;
   gap: 10px;
   padding: 0 24px 24px;
+}
+
+.result-change-summary {
+  margin: 0 24px 22px;
+  padding: 23px;
+  border: 1px solid $studio-line;
+  border-radius: 10px;
+  background: #faf8f3;
+}
+
+.result-change-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.result-change-kicker,
+.result-change-title,
+.result-change-context,
+.result-change-label,
+.result-change-instruction,
+.result-change-disclaimer {
+  display: block;
+}
+
+.result-change-kicker {
+  margin-bottom: 7px;
+  color: $studio-accent;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 3px;
+}
+
+.result-change-title {
+  color: $studio-ink;
+  font-family: "Songti SC", "STSong", serif;
+  font-size: 27px;
+  font-weight: 700;
+}
+
+.result-change-count {
+  flex: 0 0 auto;
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: $studio-sage-soft;
+  color: $studio-sage;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.result-change-context {
+  margin-top: 11px;
+  color: $studio-muted;
+  font-size: 18px;
+  line-height: 1.55;
+}
+
+.result-change-list {
+  margin-top: 17px;
+  border-top: 1px solid $studio-line;
+}
+
+.result-change-item {
+  display: grid;
+  grid-template-columns: 126px minmax(0, 1fr);
+  gap: 13px;
+  padding: 15px 0;
+  border-bottom: 1px solid $studio-line;
+}
+
+.result-change-label {
+  color: $studio-accent;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.result-change-instruction {
+  color: $studio-ink;
+  font-size: 19px;
+  line-height: 1.5;
+}
+
+.result-change-toggle {
+  margin-top: 14px;
+  color: $studio-accent;
+  font-size: 18px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.result-change-disclaimer {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px dashed #cec7bb;
+  color: $studio-muted;
+  font-size: 16px;
+  line-height: 1.5;
 }
 
 .result-primary-action {
@@ -1155,6 +1281,26 @@ $studio-sage-soft: #edf1ec;
   box-shadow: 0 10px 28px rgba(45, 39, 30, 0.03);
 }
 
+.history-heading-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.history-count {
+  flex: none;
+  margin-left: 16px;
+  white-space: nowrap;
+}
+
+.history-copy {
+  display: block;
+  max-width: 620px;
+  margin-top: 7px;
+  color: $studio-muted;
+  font-size: 17px;
+  line-height: 1.5;
+}
+
 .history-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
@@ -1162,6 +1308,7 @@ $studio-sage-soft: #edf1ec;
 
 .history-card {
   overflow: hidden;
+  padding-bottom: 0;
   border: 1px solid $studio-line;
   border-radius: 8px;
   background: transparent;
@@ -1174,10 +1321,50 @@ $studio-sage-soft: #edf1ec;
 
 .history-image {
   height: 250px;
+  margin-bottom: 0;
+}
+
+.history-card-content {
+  padding: 14px;
+}
+
+.history-card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.history-version,
+.history-name,
+.history-operation {
+  display: block;
+  padding: 0;
 }
 
 .history-version {
   color: $studio-accent;
+}
+
+.history-active-badge {
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: $studio-accent-soft;
+  color: $studio-accent;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.history-continue-button {
+  height: 58px;
+  margin: 13px 0 0;
+  border: 1px solid $studio-accent;
+  border-radius: 6px;
+  background: transparent;
+  color: $studio-accent;
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 58px;
 }
 
 @media (min-width: 760px) {
@@ -1237,6 +1424,18 @@ $studio-sage-soft: #edf1ec;
     height: 650px;
   }
 
+  .comparison-grid--pair .comparison-image {
+    height: 440px;
+  }
+
+  .result-change-item {
+    grid-template-columns: 105px minmax(0, 1fr);
+  }
+
+  .history-heading {
+    align-items: flex-start;
+  }
+
   .request-progress-footer {
     display: block;
   }
@@ -1287,7 +1486,13 @@ $studio-sage-soft: #edf1ec;
   .request-progress-step,
   .request-progress-hint,
   .error-card-kicker,
-  .error-card-guidance {
+  .error-card-guidance,
+  .comparison-item-label,
+  .result-change-kicker,
+  .result-change-label,
+  .result-change-disclaimer,
+  .history-copy,
+  .history-active-badge {
     font-size: 28px;
   }
 
@@ -1311,12 +1516,18 @@ $studio-sage-soft: #edf1ec;
   .request-progress-estimate,
   .error-card-message,
   .error-card-primary,
-  .error-card-secondary {
+  .error-card-secondary,
+  .result-change-context,
+  .result-change-instruction,
+  .result-change-toggle,
+  .result-change-count,
+  .history-continue-button {
     font-size: 30px;
   }
 
   .request-progress-title,
-  .error-card-title {
+  .error-card-title,
+  .result-change-title {
     font-size: 34px;
   }
 
@@ -1371,7 +1582,13 @@ $studio-sage-soft: #edf1ec;
   .result-review-instruction,
   .history-count,
   .history-version,
-  .history-operation {
+  .history-operation,
+  .comparison-item-label,
+  .result-change-kicker,
+  .result-change-label,
+  .result-change-disclaimer,
+  .history-copy,
+  .history-active-badge {
     font-size: 28px;
   }
 
@@ -1413,7 +1630,12 @@ $studio-sage-soft: #edf1ec;
   .review-apply-button,
   .result-review-item-title,
   .review-status-action,
-  .history-name {
+  .history-name,
+  .result-change-context,
+  .result-change-instruction,
+  .result-change-toggle,
+  .result-change-count,
+  .history-continue-button {
     font-size: 30px;
   }
 
@@ -1443,7 +1665,8 @@ $studio-sage-soft: #edf1ec;
   }
 
   .request-progress-title,
-  .error-card-title {
+  .error-card-title,
+  .result-change-title {
     font-size: 34px;
   }
 

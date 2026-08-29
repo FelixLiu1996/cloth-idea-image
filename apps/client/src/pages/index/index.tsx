@@ -35,6 +35,12 @@ import {
   type ModelRequestKind,
   type RequestFailure,
 } from "./request-experience";
+import {
+  createResultChangeSummary,
+  createResultComparisonReference,
+  defaultResultPreview,
+  type ResultPreview,
+} from "./result-comparison";
 import "./workbench.scss";
 
 const modes: readonly {
@@ -89,7 +95,6 @@ const reviewStatusLabels: Record<Exclude<GarmentResultReviewStatus, "pending">, 
 
 type ResultReviewMode = "idle" | "satisfied" | "issues" | "detailed";
 type WorkspacePanel = "brief" | "directions" | "result";
-type ResultPreview = "reference" | "current";
 type RequestFailureState = RequestFailure & {
   readonly useAnalysis?: boolean;
   readonly parentJobId?: string;
@@ -143,6 +148,7 @@ export default function Index() {
   const [reviewModes, setReviewModes] = useState<Record<string, ResultReviewMode>>({});
   const [reviewFeedbacks, setReviewFeedbacks] = useState<Record<string, string>>({});
   const [reviewChecklistOpen, setReviewChecklistOpen] = useState<Record<string, boolean>>({});
+  const [changeDetailsOpen, setChangeDetailsOpen] = useState<Record<string, boolean>>({});
   const activeRequestKind: ModelRequestKind | null = analyzing
     ? "analysis"
     : refining
@@ -226,12 +232,12 @@ export default function Index() {
     () => results.find((item) => item.jobId === activeJobId) ?? null,
     [activeJobId, results],
   );
-  const parentResult = useMemo(
+  const activeComparisonReference = useMemo(
     () =>
-      activeResult?.parentJobId
-        ? (results.find((item) => item.jobId === activeResult.parentJobId) ?? null)
+      activeResult
+        ? createResultComparisonReference(activeResult, results, image?.path ?? null)
         : null,
-    [activeResult, results],
+    [activeResult, image, results],
   );
   const latestSelectedDirectionResult = useMemo(
     () =>
@@ -255,6 +261,43 @@ export default function Index() {
         : null,
     [activeResult, analysisResult],
   );
+  const activePreserveCount = activeResult
+    ? activeResult.strategy === "analyzed"
+      ? confirmedPreserveItems.length
+      : parsePreserveItems(preserveItems).length
+    : 0;
+  const activeChangeSummary = useMemo(
+    () =>
+      activeResult
+        ? createResultChangeSummary({
+            result: activeResult,
+            direction: activeDirection,
+            directChangeRequest: changeRequest,
+            directStyleDirection: styleDirection,
+            intensityLabel: selectedIntensity.label,
+            preserveCount: activePreserveCount,
+          })
+        : null,
+    [
+      activeDirection,
+      activePreserveCount,
+      activeResult,
+      changeRequest,
+      selectedIntensity.label,
+      styleDirection,
+    ],
+  );
+  const activeChangeDetailsOpen = activeResult
+    ? (changeDetailsOpen[activeResult.jobId] ?? false)
+    : false;
+  const visibleActiveChangeItems = activeChangeSummary
+    ? activeChangeDetailsOpen
+      ? activeChangeSummary.items
+      : activeChangeSummary.items.slice(0, 3)
+    : [];
+  const activeVersionNumber = activeResult
+    ? results.findIndex((item) => item.jobId === activeResult.jobId) + 1
+    : 0;
   const activeReviewPlan = useMemo(() => {
     if (!activeResult) {
       return [];
@@ -300,6 +343,7 @@ export default function Index() {
     setReviewModes({});
     setReviewFeedbacks({});
     setReviewChecklistOpen({});
+    setChangeDetailsOpen({});
     setRequestFailure(null);
     setResultPreview("current");
     setActivePanel("brief");
@@ -424,7 +468,7 @@ export default function Index() {
           : [...current, nextResult],
       );
       setActiveJobId(nextResult.jobId);
-      setResultPreview("current");
+      setResultPreview(parent || image ? "compare" : "current");
       setActivePanel("result");
     } catch (error) {
       setRequestFailure({
@@ -465,7 +509,7 @@ export default function Index() {
       setActiveJobId(nextResult.jobId);
       setSelectedDirectionId(nextResult.directionId);
       setReviewFeedbacks((current) => ({ ...current, [parentJobId]: "" }));
-      setResultPreview("current");
+      setResultPreview("compare");
       setActivePanel("result");
     } catch (error) {
       setRequestFailure({
@@ -619,6 +663,21 @@ export default function Index() {
     setReviewModes((current) => ({ ...current, [activeResult.jobId]: mode }));
   }
 
+  function activateResult(result: GenerationApiResponse): void {
+    setActiveJobId(result.jobId);
+    setSelectedDirectionId(result.directionId);
+    setResultPreview(
+      defaultResultPreview(createResultComparisonReference(result, results, image?.path ?? null)),
+    );
+  }
+
+  function openIssuesReviewFor(jobId: string): void {
+    setReviewModes((current) => ({ ...current, [jobId]: "issues" }));
+    setTimeout(() => {
+      void Taro.pageScrollTo({ selector: "#result-review-panel", duration: 240 });
+    }, 0);
+  }
+
   function markActiveResultSatisfied(): void {
     if (!activeResult) {
       return;
@@ -678,10 +737,9 @@ export default function Index() {
   }
 
   function openIssuesReview(): void {
-    setActiveReviewMode("issues");
-    setTimeout(() => {
-      void Taro.pageScrollTo({ selector: "#result-review-panel", duration: 240 });
-    }, 0);
+    if (activeResult) {
+      openIssuesReviewFor(activeResult.jobId);
+    }
   }
 
   return (
@@ -1131,7 +1189,11 @@ export default function Index() {
                       setSelectedDirectionId(direction.id);
                       setSelectedDirectionDetailsOpen(false);
                       const existing = latestMatchingResult(results, "analyzed", direction.id);
-                      setActiveJobId(existing?.jobId ?? null);
+                      if (existing) {
+                        activateResult(existing);
+                      } else {
+                        setActiveJobId(null);
+                      }
                     }}
                   >
                     <View className="direction-heading">
@@ -1277,12 +1339,20 @@ export default function Index() {
           </View>
 
           <View className="result-preview-switch">
-            {(image || parentResult) && (
+            {activeComparisonReference && (
               <View
                 className={`result-preview-option ${resultPreview === "reference" ? "result-preview-option--active" : ""}`}
                 onClick={() => setResultPreview("reference")}
               >
-                {activeResult.operation === "refine" && parentResult ? "上一版" : "原图"}
+                {activeComparisonReference.label}
+              </View>
+            )}
+            {activeComparisonReference && (
+              <View
+                className={`result-preview-option ${resultPreview === "compare" ? "result-preview-option--active" : ""}`}
+                onClick={() => setResultPreview("compare")}
+              >
+                双图对照
               </View>
             )}
             <View
@@ -1293,29 +1363,103 @@ export default function Index() {
             </View>
           </View>
 
-          <View className="comparison-grid comparison-grid--single">
-            <View className="comparison-item">
-              <Image
-                className="comparison-image"
-                src={
-                  resultPreview === "reference" && (image || parentResult)
-                    ? activeResult.operation === "refine" && parentResult
-                      ? parentResult.resultUrl
-                      : image!.path
-                    : activeResult.resultUrl
-                }
-                mode="aspectFit"
-              />
-            </View>
+          <View
+            className={`comparison-grid ${resultPreview === "compare" && activeComparisonReference ? "comparison-grid--pair" : "comparison-grid--single"}`}
+          >
+            {resultPreview === "compare" && activeComparisonReference ? (
+              <>
+                <View className="comparison-item">
+                  <Text className="comparison-item-label">{activeComparisonReference.label}</Text>
+                  <Image
+                    className="comparison-image"
+                    src={activeComparisonReference.url}
+                    mode="aspectFit"
+                  />
+                </View>
+                <View className="comparison-item comparison-item--current">
+                  <Text className="comparison-item-label">当前结果</Text>
+                  <Image
+                    className="comparison-image"
+                    src={activeResult.resultUrl}
+                    mode="aspectFit"
+                  />
+                </View>
+              </>
+            ) : (
+              <View className="comparison-item">
+                <Text className="comparison-item-label">
+                  {resultPreview === "reference" && activeComparisonReference
+                    ? activeComparisonReference.label
+                    : "当前结果"}
+                </Text>
+                <Image
+                  className="comparison-image"
+                  src={
+                    resultPreview === "reference" && activeComparisonReference
+                      ? activeComparisonReference.url
+                      : activeResult.resultUrl
+                  }
+                  mode="aspectFit"
+                />
+              </View>
+            )}
           </View>
 
           <View className="result-meta">
-            <Text>{activeResult.directionName ?? "直接生成"}</Text>
+            <Text>
+              版本 {activeVersionNumber} · {activeResult.directionName ?? "直接生成"}
+            </Text>
             <Text>
               {operationLabels[activeResult.operation]} ·{" "}
               {Math.max(1, Math.round(activeResult.durationMs / 1_000))} 秒
             </Text>
           </View>
+
+          {activeChangeSummary && (
+            <View className="result-change-summary">
+              <View className="result-change-heading">
+                <View>
+                  <Text className="result-change-kicker">VERSION NOTES</Text>
+                  <Text className="result-change-title">这版具体改了什么</Text>
+                </View>
+                <Text className="result-change-count">
+                  {activeChangeSummary.items.length} 项依据
+                </Text>
+              </View>
+              <Text className="result-change-context">{activeChangeSummary.context}</Text>
+              {visibleActiveChangeItems.length > 0 && (
+                <View className="result-change-list">
+                  {visibleActiveChangeItems.map((item, index) => (
+                    <View
+                      key={`${item.label}-${item.instruction}-${index}`}
+                      className="result-change-item"
+                    >
+                      <Text className="result-change-label">{item.label}</Text>
+                      <Text className="result-change-instruction">{item.instruction}</Text>
+                    </View>
+                  ))}
+                </View>
+              )}
+              {activeChangeSummary.items.length > 3 && (
+                <View
+                  className="result-change-toggle"
+                  onClick={() =>
+                    setChangeDetailsOpen((current) => ({
+                      ...current,
+                      [activeResult.jobId]: !activeChangeDetailsOpen,
+                    }))
+                  }
+                >
+                  {activeChangeDetailsOpen
+                    ? "收起完整生成依据"
+                    : `展开全部 ${activeChangeSummary.items.length} 项`}
+                </View>
+              )}
+              <Text className="result-change-disclaimer">
+                以上是发送给生图模型的设计依据，不代表系统已自动确认图片全部落实；请结合上方对照图判断。
+              </Text>
+            </View>
+          )}
 
           <View className="result-primary-actions">
             <Button
@@ -1550,7 +1694,12 @@ export default function Index() {
       {activePanel === "result" && results.length > 0 && (
         <View className="section history-section">
           <View className="history-heading">
-            <Text className="section-title">本次生成历史</Text>
+            <View className="history-heading-copy">
+              <Text className="section-title">本次生成历史</Text>
+              <Text className="history-copy">
+                点选任一版本查看；从旧版本继续修改会建立新分支，不会覆盖后续版本。
+              </Text>
+            </View>
             <Text className="history-count">{results.length} 个版本</Text>
           </View>
           <View className="history-grid">
@@ -1558,16 +1707,30 @@ export default function Index() {
               <View
                 key={item.jobId}
                 className={`history-card ${item.jobId === activeJobId ? "history-card--active" : ""}`}
-                onClick={() => {
-                  setActiveJobId(item.jobId);
-                  setSelectedDirectionId(item.directionId);
-                  setResultPreview("current");
-                }}
+                onClick={() => activateResult(item)}
               >
                 <Image className="history-image" src={item.resultUrl} mode="aspectFill" />
-                <Text className="history-version">版本 {index + 1}</Text>
-                <Text className="history-name">{item.directionName ?? "直接生成"}</Text>
-                <Text className="history-operation">{operationLabels[item.operation]}</Text>
+                <View className="history-card-content">
+                  <View className="history-card-heading">
+                    <Text className="history-version">版本 {index + 1}</Text>
+                    {item.jobId === activeJobId && (
+                      <Text className="history-active-badge">当前查看</Text>
+                    )}
+                  </View>
+                  <Text className="history-name">{item.directionName ?? "直接生成"}</Text>
+                  <Text className="history-operation">{operationLabels[item.operation]}</Text>
+                  {item.jobId === activeJobId && (
+                    <Button
+                      className="history-continue-button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        openIssuesReviewFor(item.jobId);
+                      }}
+                    >
+                      从这版继续修改
+                    </Button>
+                  )}
+                </View>
               </View>
             ))}
           </View>
