@@ -120,6 +120,7 @@ export default function Index() {
   const [customPreserveItem, setCustomPreserveItem] = useState("");
   const [preserveEditorOpen, setPreserveEditorOpen] = useState(false);
   const [selectedDirectionId, setSelectedDirectionId] = useState<string | null>(null);
+  const [selectedDirectionDetailsOpen, setSelectedDirectionDetailsOpen] = useState(false);
   const [results, setResults] = useState<GenerationApiResponse[]>([]);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [trialAccessRequired, setTrialAccessRequired] = useState(false);
@@ -254,6 +255,7 @@ export default function Index() {
     setCustomPreserveItem("");
     setPreserveEditorOpen(false);
     setSelectedDirectionId(null);
+    setSelectedDirectionDetailsOpen(false);
     setResults([]);
     setActiveJobId(null);
     setReviewStatuses({});
@@ -309,6 +311,7 @@ export default function Index() {
     setErrorMessage("");
     setAnalysisResult(null);
     setSelectedDirectionId(null);
+    setSelectedDirectionDetailsOpen(false);
     setResults([]);
     setActiveJobId(null);
     try {
@@ -320,6 +323,7 @@ export default function Index() {
       setCustomPreserveItem("");
       setPreserveEditorOpen(false);
       setSelectedDirectionId(nextAnalysis.analysis.recommendedDirectionId);
+      setSelectedDirectionDetailsOpen(false);
       setActivePanel("directions");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "分析失败，请稍后重试。");
@@ -950,6 +954,7 @@ export default function Index() {
                         return;
                       }
                       setSelectedDirectionId(direction.id);
+                      setSelectedDirectionDetailsOpen(false);
                       const existing = latestMatchingResult(results, "analyzed", direction.id);
                       setActiveJobId(existing?.jobId ?? null);
                     }}
@@ -976,47 +981,79 @@ export default function Index() {
                             推荐理由：{analysisResult.analysis.recommendationReason}
                           </Text>
                         )}
-                        <View className="direction-overview">
-                          <Text className="direction-overview-label">改款幅度</Text>
-                          <Text className="direction-overview-value">
-                            {selectedIntensity.label}
-                          </Text>
-                          <Text className="direction-overview-copy">
-                            {selectedIntensity.description}
-                          </Text>
-                        </View>
-                        <View className="direction-preserve-block">
-                          <Text className="direction-detail-title">继承的保留项</Text>
-                          <View className="direction-preserve-list">
-                            {directionPreserveItems.map((item) => (
-                              <Text key={item} className="direction-preserve-chip">
-                                {formatGarmentPreserveItem(item)}
-                              </Text>
-                            ))}
+                        <View className="direction-selection-summary">
+                          <View className="direction-selection-stat">
+                            <Text className="direction-selection-label">改款幅度</Text>
+                            <Text className="direction-selection-value">
+                              {selectedIntensity.label}
+                            </Text>
+                          </View>
+                          <View className="direction-selection-stat">
+                            <Text className="direction-selection-label">主要变化</Text>
+                            <Text className="direction-selection-value">
+                              {direction.changes.length} 项
+                            </Text>
+                          </View>
+                          <View className="direction-selection-stat">
+                            <Text className="direction-selection-label">继承锁定</Text>
+                            <Text className="direction-selection-value">
+                              {directionPreserveItems.length} 项
+                            </Text>
                           </View>
                         </View>
-                        <Text className="direction-detail-title direction-detail-title--changes">
-                          主要变化
+                        <Text className="direction-selection-copy">
+                          {selectedIntensity.description}
                         </Text>
-                        <View className="change-list">
-                          {direction.changes.map((change) => (
-                            <View
-                              key={`${change.area}-${change.instruction}`}
-                              className="change-item"
-                            >
-                              <Text className="change-area">
-                                {garmentChangeAreaLabels[change.area]}
-                              </Text>
-                              <View className="change-content">
-                                <Text className="change-instruction">{change.instruction}</Text>
-                                <Text className="change-reason">{change.reason}</Text>
+                        <View
+                          className="direction-detail-toggle"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setSelectedDirectionDetailsOpen((current) => !current);
+                          }}
+                        >
+                          <Text className="direction-detail-toggle-title">完整改款清单</Text>
+                          <Text className="direction-detail-toggle-state">
+                            {selectedDirectionDetailsOpen
+                              ? "收起"
+                              : `查看 ${direction.changes.length} 项`}
+                          </Text>
+                        </View>
+                        {selectedDirectionDetailsOpen && (
+                          <View className="direction-detail-content">
+                            <View className="direction-preserve-block">
+                              <Text className="direction-detail-title">继承的保留项</Text>
+                              <View className="direction-preserve-list">
+                                {directionPreserveItems.map((item) => (
+                                  <Text key={item} className="direction-preserve-chip">
+                                    {formatGarmentPreserveItem(item)}
+                                  </Text>
+                                ))}
                               </View>
                             </View>
-                          ))}
-                        </View>
+                            <Text className="direction-detail-title direction-detail-title--changes">
+                              主要变化
+                            </Text>
+                            <View className="change-list">
+                              {direction.changes.map((change) => (
+                                <View
+                                  key={`${change.area}-${change.instruction}`}
+                                  className="change-item"
+                                >
+                                  <Text className="change-area">
+                                    {garmentChangeAreaLabels[change.area]}
+                                  </Text>
+                                  <View className="change-content">
+                                    <Text className="change-instruction">{change.instruction}</Text>
+                                    <Text className="change-reason">{change.reason}</Text>
+                                  </View>
+                                </View>
+                              ))}
+                            </View>
+                          </View>
+                        )}
                       </>
                     ) : (
-                      <Text className="direction-expand-hint">点击查看保留项和完整改款清单</Text>
+                      <Text className="direction-expand-hint">点击选择此方向</Text>
                     )}
                     <Text className={`risk-label risk-label--${direction.productionRisk.level}`}>
                       {riskLabels[direction.productionRisk.level]} ·{" "}

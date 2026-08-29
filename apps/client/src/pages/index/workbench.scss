@@ -647,6 +647,80 @@ $studio-sage-soft: #edf1ec;
   font-size: 17px;
 }
 
+.direction-selection-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 18px;
+  border-top: 1px solid $studio-line;
+  border-bottom: 1px solid $studio-line;
+}
+
+.direction-selection-stat {
+  padding: 14px 10px;
+  border-right: 1px solid $studio-line;
+}
+
+.direction-selection-stat:first-child {
+  padding-left: 0;
+}
+
+.direction-selection-stat:last-child {
+  padding-right: 0;
+  border-right: 0;
+}
+
+.direction-selection-label,
+.direction-selection-value,
+.direction-selection-copy,
+.direction-detail-toggle-title,
+.direction-detail-toggle-state {
+  display: block;
+}
+
+.direction-selection-label {
+  color: $studio-muted;
+  font-size: 16px;
+}
+
+.direction-selection-value {
+  margin-top: 4px;
+  color: $studio-ink;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.direction-selection-copy {
+  margin-top: 12px;
+  color: $studio-muted;
+  font-size: 17px;
+  line-height: 1.5;
+}
+
+.direction-detail-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 16px;
+  padding: 14px 0 2px;
+  border-top: 1px solid $studio-line;
+}
+
+.direction-detail-toggle-title {
+  color: $studio-ink;
+  font-size: 19px;
+  font-weight: 700;
+}
+
+.direction-detail-toggle-state {
+  color: $studio-accent;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.direction-detail-content {
+  margin-top: 16px;
+}
+
 .direction-overview,
 .direction-preserve-block,
 .change-item {
@@ -1004,6 +1078,8 @@ $studio-sage-soft: #edf1ec;
   .preserve-editor-toggle-copy,
   .stage-context-meta,
   .direction-area-chip,
+  .direction-selection-label,
+  .direction-selection-copy,
   .result-meta,
   .result-review-copy,
   .review-quick-action-copy,
@@ -1023,6 +1099,9 @@ $studio-sage-soft: #edf1ec;
   .stage-context-action,
   .preserve-editor-toggle-title,
   .preserve-editor-toggle-state,
+  .direction-selection-value,
+  .direction-detail-toggle-title,
+  .direction-detail-toggle-state,
   .result-preview-option,
   .result-primary-action,
   .review-quick-action-title,
@@ -1060,6 +1139,8 @@ $studio-sage-soft: #edf1ec;
   .stage-context-kicker,
   .stage-context-meta,
   .direction-area-chip,
+  .direction-selection-label,
+  .direction-selection-copy,
   .direction-overview-label,
   .direction-overview-value,
   .direction-overview-copy,
@@ -1102,6 +1183,9 @@ $studio-sage-soft: #edf1ec;
   .custom-preserve-input,
   .custom-preserve-button,
   .direction-summary,
+  .direction-selection-value,
+  .direction-detail-toggle-title,
+  .direction-detail-toggle-state,
   .recommendation-reason,
   .direction-detail-title,
   .change-instruction,
