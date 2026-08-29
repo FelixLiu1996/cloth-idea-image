@@ -171,6 +171,7 @@ $studio-sage-soft: #edf1ec;
 .analysis-section,
 .result-section,
 .history-section,
+.request-progress-card,
 .error-card {
   max-width: 920px;
   margin-right: auto;
@@ -436,6 +437,190 @@ $studio-sage-soft: #edf1ec;
   background: #f8ebe5;
   color: #7c2e21;
   font-size: 21px;
+}
+
+.request-progress-card {
+  margin-bottom: 26px;
+  padding: 27px;
+  border: 1px solid #cdd4cb;
+  border-radius: 12px;
+  background: $studio-paper;
+  box-shadow: 0 10px 28px rgba(45, 39, 30, 0.035);
+}
+
+.request-progress-heading,
+.request-progress-footer,
+.error-card-actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.request-progress-kicker,
+.request-progress-title,
+.request-progress-description,
+.request-progress-estimate,
+.request-progress-hint,
+.error-card-kicker,
+.error-card-title,
+.error-card-message,
+.error-card-guidance {
+  display: block;
+}
+
+.request-progress-kicker,
+.error-card-kicker {
+  margin-bottom: 7px;
+  color: $studio-accent;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 3px;
+}
+
+.request-progress-title,
+.error-card-title {
+  color: $studio-ink;
+  font-family: "Songti SC", "STSong", serif;
+  font-size: 30px;
+  font-weight: 700;
+}
+
+.request-progress-time {
+  flex: 0 0 auto;
+  padding: 6px 11px;
+  border-radius: 999px;
+  background: $studio-sage-soft;
+  color: $studio-sage;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.request-progress-description {
+  margin-top: 13px;
+  color: $studio-muted;
+  font-size: 20px;
+  line-height: 1.55;
+}
+
+.request-progress-track {
+  height: 8px;
+  margin-top: 22px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e6e3dc;
+}
+
+.request-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: $studio-accent;
+  transition: width 300ms ease;
+}
+
+.request-progress-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.request-progress-step {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  color: #aaa69e;
+  font-size: 18px;
+  line-height: 1.4;
+}
+
+.request-progress-step--active {
+  color: $studio-ink;
+  font-weight: 700;
+}
+
+.request-progress-step--done {
+  color: $studio-sage;
+}
+
+.request-progress-step-mark {
+  display: flex;
+  width: 27px;
+  height: 27px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 15px;
+}
+
+.request-progress-footer {
+  margin-top: 21px;
+  padding-top: 17px;
+  border-top: 1px solid $studio-line;
+}
+
+.request-progress-estimate {
+  color: $studio-ink;
+  font-size: 19px;
+  font-weight: 700;
+}
+
+.request-progress-hint {
+  max-width: 58%;
+  color: $studio-muted;
+  font-size: 17px;
+  line-height: 1.5;
+  text-align: right;
+}
+
+.error-card--actionable {
+  color: $studio-ink;
+}
+
+.error-card-message {
+  margin-top: 13px;
+  color: #7c2e21;
+  line-height: 1.5;
+}
+
+.error-card-guidance {
+  margin-top: 9px;
+  color: $studio-muted;
+  font-size: 18px;
+  line-height: 1.55;
+}
+
+.error-card-actions {
+  justify-content: flex-start;
+  margin-top: 20px;
+}
+
+.error-card-primary,
+.error-card-secondary {
+  width: auto;
+  min-width: 190px;
+  height: 66px;
+  margin: 0;
+  padding: 0 22px;
+  border-radius: 7px;
+  font-size: 19px;
+  font-weight: 700;
+  line-height: 66px;
+}
+
+.error-card-primary {
+  background: $studio-accent;
+  color: #fff;
+}
+
+.error-card-secondary {
+  border: 1px solid #cbbdb6;
+  background: transparent;
+  color: $studio-muted;
 }
 
 .stage-context {
@@ -1051,6 +1236,16 @@ $studio-sage-soft: #edf1ec;
   .comparison-image {
     height: 650px;
   }
+
+  .request-progress-footer {
+    display: block;
+  }
+
+  .request-progress-hint {
+    max-width: none;
+    margin-top: 8px;
+    text-align: left;
+  }
 }
 
 .page-shell--weapp {
@@ -1087,7 +1282,12 @@ $studio-sage-soft: #edf1ec;
   .review-resolution-copy,
   .review-issue-copy,
   .review-detail-note,
-  .review-cost-note {
+  .review-cost-note,
+  .request-progress-kicker,
+  .request-progress-step,
+  .request-progress-hint,
+  .error-card-kicker,
+  .error-card-guidance {
     font-size: 28px;
   }
 
@@ -1105,8 +1305,19 @@ $studio-sage-soft: #edf1ec;
   .result-preview-option,
   .result-primary-action,
   .review-quick-action-title,
-  .review-feedback-input {
+  .review-feedback-input,
+  .request-progress-description,
+  .request-progress-time,
+  .request-progress-estimate,
+  .error-card-message,
+  .error-card-primary,
+  .error-card-secondary {
     font-size: 30px;
+  }
+
+  .request-progress-title,
+  .error-card-title {
+    font-size: 34px;
   }
 
   .hero-title {
@@ -1206,11 +1417,33 @@ $studio-sage-soft: #edf1ec;
     font-size: 30px;
   }
 
+  .request-progress-kicker,
+  .request-progress-step,
+  .request-progress-hint,
+  .error-card-kicker,
+  .error-card-guidance {
+    font-size: 28px;
+  }
+
+  .request-progress-description,
+  .request-progress-time,
+  .request-progress-estimate,
+  .error-card-message,
+  .error-card-primary,
+  .error-card-secondary {
+    font-size: 30px;
+  }
+
   .workbench-brand-name,
   .mode-title,
   .section-title,
   .preserve-confirmation-title,
   .result-review-title {
+    font-size: 34px;
+  }
+
+  .request-progress-title,
+  .error-card-title {
     font-size: 34px;
   }
 

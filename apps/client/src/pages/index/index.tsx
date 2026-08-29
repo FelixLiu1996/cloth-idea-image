@@ -29,6 +29,12 @@ import { readTrialAccessCode, saveTrialAccessCode } from "../../platform/trial-a
 import { garmentGateway } from "../../services/active-garment-gateway";
 import type { CreateGenerationRequest } from "../../services/garment-gateway";
 import "./index.scss";
+import {
+  createRequestFailure,
+  createRequestProgress,
+  type ModelRequestKind,
+  type RequestFailure,
+} from "./request-experience";
 import "./workbench.scss";
 
 const modes: readonly {
@@ -84,6 +90,11 @@ const reviewStatusLabels: Record<Exclude<GarmentResultReviewStatus, "pending">, 
 type ResultReviewMode = "idle" | "satisfied" | "issues" | "detailed";
 type WorkspacePanel = "brief" | "directions" | "result";
 type ResultPreview = "reference" | "current";
+type RequestFailureState = RequestFailure & {
+  readonly useAnalysis?: boolean;
+  readonly parentJobId?: string;
+  readonly refinementInstruction?: string;
+};
 
 function latestMatchingResult(
   results: readonly GenerationApiResponse[],
@@ -113,7 +124,8 @@ export default function Index() {
   const [generating, setGenerating] = useState(false);
   const [refining, setRefining] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [errorMessage, setErrorMessage] = useState("");
+  const [requestFailure, setRequestFailure] = useState<RequestFailureState | null>(null);
+  const [requestElapsedSeconds, setRequestElapsedSeconds] = useState(0);
   const [analysisResult, setAnalysisResult] = useState<GarmentAnalysisApiResponse | null>(null);
   const [analysisBasePreserveItems, setAnalysisBasePreserveItems] = useState<string[]>([]);
   const [confirmedPreserveItems, setConfirmedPreserveItems] = useState<string[]>([]);
@@ -131,6 +143,13 @@ export default function Index() {
   const [reviewModes, setReviewModes] = useState<Record<string, ResultReviewMode>>({});
   const [reviewFeedbacks, setReviewFeedbacks] = useState<Record<string, string>>({});
   const [reviewChecklistOpen, setReviewChecklistOpen] = useState<Record<string, boolean>>({});
+  const activeRequestKind: ModelRequestKind | null = analyzing
+    ? "analysis"
+    : refining
+      ? "refinement"
+      : generating
+        ? "generation"
+        : null;
 
   useEffect(() => {
     let active = true;
@@ -173,7 +192,26 @@ export default function Index() {
     void Taro.pageScrollTo({ scrollTop: 0, duration: 0 });
   }, [activePanel]);
 
+  useEffect(() => {
+    if (!activeRequestKind) {
+      return;
+    }
+    const startedAt = Date.now();
+    const updateElapsed = () => {
+      setRequestElapsedSeconds(Math.floor((Date.now() - startedAt) / 1_000));
+    };
+    updateElapsed();
+    const timer = setInterval(updateElapsed, 1_000);
+    return () => clearInterval(timer);
+  }, [activeRequestKind]);
+
   const busy = analyzing || generating || refining;
+  const requestExperienceOptions = {
+    supportsPendingRestore: process.env.TARO_ENV === "weapp",
+  } as const;
+  const requestProgress = activeRequestKind
+    ? createRequestProgress(activeRequestKind, requestElapsedSeconds, requestExperienceOptions)
+    : null;
   const canRequest = useMemo(
     () =>
       image !== null &&
@@ -262,7 +300,7 @@ export default function Index() {
     setReviewModes({});
     setReviewFeedbacks({});
     setReviewChecklistOpen({});
-    setErrorMessage("");
+    setRequestFailure(null);
     setResultPreview("current");
     setActivePanel("brief");
   }
@@ -300,6 +338,23 @@ export default function Index() {
     }
   }
 
+  async function chooseRefinementSourceImage() {
+    if (busy || modelRequestInFlight.current) {
+      return;
+    }
+    const selected = await selectGarmentImage();
+    if (!selected) {
+      return;
+    }
+    if (selected.size > 10 * 1024 * 1024) {
+      await Taro.showToast({ title: "图片不能超过 10 MB", icon: "none" });
+      return;
+    }
+    setImage(selected);
+    setRequestFailure(null);
+    await Taro.showToast({ title: "原图已更新，可以继续修改", icon: "success" });
+  }
+
   async function analyze() {
     const input = requestInput();
     if (!canRequest || !input || modelRequestInFlight.current) {
@@ -307,8 +362,10 @@ export default function Index() {
     }
 
     modelRequestInFlight.current = true;
+    setRequestElapsedSeconds(0);
     setAnalyzing(true);
-    setErrorMessage("");
+    setRequestFailure(null);
+    void Taro.pageScrollTo({ scrollTop: 0, duration: 240 });
     setAnalysisResult(null);
     setSelectedDirectionId(null);
     setSelectedDirectionDetailsOpen(false);
@@ -326,7 +383,7 @@ export default function Index() {
       setSelectedDirectionDetailsOpen(false);
       setActivePanel("directions");
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "分析失败，请稍后重试。");
+      setRequestFailure(createRequestFailure("analysis", error, requestExperienceOptions));
     } finally {
       modelRequestInFlight.current = false;
       setAnalyzing(false);
@@ -343,15 +400,17 @@ export default function Index() {
     }
 
     modelRequestInFlight.current = true;
+    setRequestElapsedSeconds(0);
     setGenerating(true);
-    setErrorMessage("");
+    setRequestFailure(null);
+    void Taro.pageScrollTo({ scrollTop: 0, duration: 240 });
+    const parent =
+      parentOverride === undefined
+        ? useAnalysis
+          ? latestMatchingResult(results, "analyzed", selectedDirectionId)
+          : latestMatchingResult(results, "direct", null)
+        : parentOverride;
     try {
-      const parent =
-        parentOverride === undefined
-          ? useAnalysis
-            ? latestMatchingResult(results, "analyzed", selectedDirectionId)
-            : latestMatchingResult(results, "direct", null)
-          : parentOverride;
       const nextResult = await garmentGateway.createGeneration({
         ...input,
         ...(useAnalysis && analysisResult && selectedDirectionId
@@ -368,7 +427,11 @@ export default function Index() {
       setResultPreview("current");
       setActivePanel("result");
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "生成失败，请稍后重试。");
+      setRequestFailure({
+        ...createRequestFailure("generation", error, requestExperienceOptions),
+        useAnalysis,
+        ...(parent ? { parentJobId: parent.jobId } : {}),
+      });
     } finally {
       modelRequestInFlight.current = false;
       setGenerating(false);
@@ -383,8 +446,10 @@ export default function Index() {
 
     const parentJobId = activeResult.jobId;
     modelRequestInFlight.current = true;
+    setRequestElapsedSeconds(0);
     setRefining(true);
-    setErrorMessage("");
+    setRequestFailure(null);
+    void Taro.pageScrollTo({ scrollTop: 0, duration: 240 });
     try {
       const nextResult = await garmentGateway.refineGeneration({
         parentJobId,
@@ -403,7 +468,11 @@ export default function Index() {
       setResultPreview("current");
       setActivePanel("result");
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "继续修改失败，请稍后重试。");
+      setRequestFailure({
+        ...createRequestFailure("refinement", error, requestExperienceOptions),
+        parentJobId,
+        refinementInstruction: instruction,
+      });
     } finally {
       modelRequestInFlight.current = false;
       setRefining(false);
@@ -416,14 +485,69 @@ export default function Index() {
     }
 
     setSaving(true);
-    setErrorMessage("");
+    setRequestFailure(null);
     try {
       await saveGeneratedImage(activeResult.resultUrl);
       await Taro.showToast({ title: "图片已保存", icon: "success" });
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "图片保存失败，请稍后重试。");
+      setRequestFailure(createRequestFailure("save", error, requestExperienceOptions));
     } finally {
       setSaving(false);
+    }
+  }
+
+  function handleRequestFailureAction(): void {
+    if (!requestFailure || busy || saving) {
+      return;
+    }
+    const failure = requestFailure;
+    setRequestFailure(null);
+
+    if (failure.recovery === "reselect-source") {
+      if (failure.operation === "refinement") {
+        void chooseRefinementSourceImage();
+      } else {
+        void chooseImage();
+      }
+      return;
+    }
+
+    if (failure.recovery === "review-access") {
+      setActivePanel("brief");
+      return;
+    }
+
+    if (failure.recovery === "review-input") {
+      if (failure.operation === "refinement") {
+        setActivePanel("result");
+        setActiveReviewMode("issues");
+      } else {
+        setActivePanel("brief");
+      }
+      return;
+    }
+
+    if (failure.recovery !== "retry") {
+      return;
+    }
+
+    if (failure.operation === "analysis") {
+      void analyze();
+      return;
+    }
+    if (failure.operation === "generation") {
+      const parent = failure.parentJobId
+        ? (results.find((item) => item.jobId === failure.parentJobId) ?? null)
+        : null;
+      void generate(failure.useAnalysis ?? false, parent);
+      return;
+    }
+    if (failure.operation === "refinement" && failure.refinementInstruction) {
+      void refineCurrentResult(failure.refinementInstruction);
+      return;
+    }
+    if (failure.operation === "save") {
+      void downloadCurrentResult();
     }
   }
 
@@ -614,7 +738,58 @@ export default function Index() {
         </View>
       </View>
 
-      {errorMessage && <View className="error-card">{errorMessage}</View>}
+      {requestProgress && (
+        <View className="request-progress-card">
+          <View className="request-progress-heading">
+            <View>
+              <Text className="request-progress-kicker">PROCESSING</Text>
+              <Text className="request-progress-title">{requestProgress.title}</Text>
+            </View>
+            <Text className="request-progress-time">{requestProgress.elapsedSeconds} 秒</Text>
+          </View>
+          <Text className="request-progress-description">{requestProgress.description}</Text>
+          <View className="request-progress-track">
+            <View
+              className="request-progress-fill"
+              style={{ width: `${requestProgress.progressPercent}%` }}
+            />
+          </View>
+          <View className="request-progress-steps">
+            {requestProgress.steps.map((step, index) => (
+              <View
+                key={step}
+                className={`request-progress-step ${index < requestProgress.activeStep ? "request-progress-step--done" : ""} ${index === requestProgress.activeStep ? "request-progress-step--active" : ""}`}
+              >
+                <Text className="request-progress-step-mark">
+                  {index < requestProgress.activeStep ? "✓" : index + 1}
+                </Text>
+                <Text>{step}</Text>
+              </View>
+            ))}
+          </View>
+          <View className="request-progress-footer">
+            <Text className="request-progress-estimate">{requestProgress.estimate}</Text>
+            <Text className="request-progress-hint">{requestProgress.navigationHint}</Text>
+          </View>
+        </View>
+      )}
+
+      {requestFailure && (
+        <View className="error-card error-card--actionable">
+          <Text className="error-card-kicker">需要处理</Text>
+          <Text className="error-card-title">{requestFailure.title}</Text>
+          <Text className="error-card-message">{requestFailure.message}</Text>
+          <Text className="error-card-guidance">{requestFailure.guidance}</Text>
+          <View className="error-card-actions">
+            <Button className="error-card-primary" onClick={handleRequestFailureAction}>
+              {requestFailure.actionLabel}
+            </Button>
+            <Button className="error-card-secondary" onClick={() => setRequestFailure(null)}>
+              关闭提示
+            </Button>
+          </View>
+        </View>
+      )}
 
       {activePanel === "brief" && (
         <>
@@ -777,7 +952,7 @@ export default function Index() {
               }}
             >
               {analyzing
-                ? "正在分析原款，预计 1–2 分钟…"
+                ? "正在分析原款…"
                 : analysisResult
                   ? "继续查看设计方向"
                   : "分析原款，查看 3 个方向"}
@@ -789,7 +964,7 @@ export default function Index() {
                 onClick={() => generate(false)}
               >
                 {generating
-                  ? "正在创建并处理生成任务…"
+                  ? "正在生成新的效果图…"
                   : latestDirectResult
                     ? "按原要求再生成一版"
                     : "跳过分析，直接生成"}
@@ -1081,7 +1256,7 @@ export default function Index() {
               onClick={() => generate(true)}
             >
               {generating
-                ? "正在创建并处理生成任务…"
+                ? "正在生成新的效果图…"
                 : latestSelectedDirectionResult
                   ? "按选中方向再生成一版"
                   : "按选中方向生成效果图"}
