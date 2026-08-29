@@ -1236,7 +1236,128 @@ $studio-sage-soft: #edf1ec;
   font-size: 17px;
 }
 
+.refinement-axis-panel {
+  margin-top: 18px;
+  padding: 18px;
+  border: 1px solid $studio-line;
+  border-radius: 8px;
+  background: $studio-paper;
+}
+
+.refinement-axis-title,
+.refinement-axis-copy,
+.refinement-axis-group-label,
+.refinement-axis-option-label,
+.refinement-axis-option-state,
+.refinement-axis-option-copy {
+  display: block;
+}
+
+.refinement-axis-title {
+  color: $studio-ink;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.refinement-axis-copy {
+  margin-top: 6px;
+  color: $studio-muted;
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.refinement-axis-group {
+  margin-top: 17px;
+}
+
+.refinement-axis-group-label {
+  margin-bottom: 9px;
+  color: $studio-muted;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+.refinement-axis-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.refinement-axis-grid:not(.refinement-axis-grid--intensity)
+  .refinement-axis-option:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
+.refinement-axis-option {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid $studio-line;
+  border-radius: 7px;
+  background: #f7f5ef;
+}
+
+.refinement-axis-option--selected {
+  border-color: $studio-accent;
+  background: $studio-accent-soft;
+  box-shadow: inset 0 0 0 1px $studio-accent;
+}
+
+.refinement-axis-option-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.refinement-axis-option-label {
+  min-width: 0;
+  color: $studio-ink;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.refinement-axis-option-state {
+  flex: none;
+  color: $studio-accent;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.refinement-axis-option-copy {
+  margin-top: 7px;
+  color: $studio-muted;
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.refinement-axis-confirmation {
+  margin-top: 11px;
+  padding: 12px 14px;
+  border-left: 3px solid $studio-accent;
+  background: $studio-accent-soft;
+}
+
+.refinement-axis-confirmation-title,
+.refinement-axis-confirmation-copy {
+  display: block;
+}
+
+.refinement-axis-confirmation-title {
+  color: $studio-accent;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.refinement-axis-confirmation-copy {
+  margin-top: 4px;
+  color: $studio-muted;
+  font-size: 15px;
+  line-height: 1.45;
+}
+
 .review-feedback-input {
+  margin-top: 13px;
   border: 1px solid $studio-line;
   border-radius: 8px;
   font-size: 22px;
@@ -1492,7 +1613,12 @@ $studio-sage-soft: #edf1ec;
   .result-change-label,
   .result-change-disclaimer,
   .history-copy,
-  .history-active-badge {
+  .history-active-badge,
+  .refinement-axis-copy,
+  .refinement-axis-group-label,
+  .refinement-axis-option-state,
+  .refinement-axis-option-copy,
+  .refinement-axis-confirmation-copy {
     font-size: 28px;
   }
 
@@ -1521,7 +1647,10 @@ $studio-sage-soft: #edf1ec;
   .result-change-instruction,
   .result-change-toggle,
   .result-change-count,
-  .history-continue-button {
+  .history-continue-button,
+  .refinement-axis-title,
+  .refinement-axis-option-label,
+  .refinement-axis-confirmation-title {
     font-size: 30px;
   }
 
@@ -1588,7 +1717,12 @@ $studio-sage-soft: #edf1ec;
   .result-change-label,
   .result-change-disclaimer,
   .history-copy,
-  .history-active-badge {
+  .history-active-badge,
+  .refinement-axis-copy,
+  .refinement-axis-group-label,
+  .refinement-axis-option-state,
+  .refinement-axis-option-copy,
+  .refinement-axis-confirmation-copy {
     font-size: 28px;
   }
 
@@ -1635,7 +1769,10 @@ $studio-sage-soft: #edf1ec;
   .result-change-instruction,
   .result-change-toggle,
   .result-change-count,
-  .history-continue-button {
+  .history-continue-button,
+  .refinement-axis-title,
+  .refinement-axis-option-label,
+  .refinement-axis-confirmation-title {
     font-size: 30px;
   }
 

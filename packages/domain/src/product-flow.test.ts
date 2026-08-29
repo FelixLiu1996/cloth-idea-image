@@ -5,6 +5,7 @@ import {
   createGarmentRefinementInstruction,
   createGarmentResultReviewPlan,
   createPreserveItemSuggestions,
+  garmentRefinementAxisOptions,
   formatGarmentPreserveItem,
   parsePreserveItems,
   serializePreserveItems,
@@ -149,5 +150,45 @@ describe("garment result review plan", () => {
     expect(instruction).toBe("用户补充要求：袖型更宽松一点。其余已确认元素和设计方向保持不变。");
     expect(longInstruction.length).toBe(500);
     expect(longInstruction.endsWith("其余已确认元素和设计方向保持不变。")).toBe(true);
+  });
+
+  it("compiles a single refinement dimension without requiring free text", () => {
+    const instruction = createGarmentRefinementInstruction([], "", "silhouette-proportion");
+
+    expect(instruction).toContain("本轮只探索廓形与比例");
+    expect(instruction).toContain("保持面料、色彩");
+    expect(instruction).toContain("除选中维度和明确问题外");
+  });
+
+  it("combines one refinement dimension, optional feedback and review issues deterministically", () => {
+    const instruction = createGarmentRefinementInstruction(
+      [
+        {
+          id: "anomaly-text-watermark",
+          kind: "anomaly",
+          title: "文字与水印",
+          instruction: "确认没有文字。",
+        },
+      ],
+      "以酒红色作为局部点缀",
+      "color-finish",
+    );
+
+    expect(instruction).toContain("本轮只探索色彩与工艺");
+    expect(instruction).toContain("在上述范围内执行用户补充要求：以酒红色作为局部点缀");
+    expect(instruction).toContain("同时修正以下问题：修正“文字与水印”");
+    expect(instruction.length).toBeLessThanOrEqual(500);
+  });
+
+  it("keeps refinement axis ids unique and separates dimensions from intensity controls", () => {
+    expect(new Set(garmentRefinementAxisOptions.map((option) => option.id)).size).toBe(
+      garmentRefinementAxisOptions.length,
+    );
+    expect(
+      garmentRefinementAxisOptions.filter((option) => option.kind === "dimension"),
+    ).toHaveLength(3);
+    expect(
+      garmentRefinementAxisOptions.filter((option) => option.kind === "intensity"),
+    ).toHaveLength(2);
   });
 });

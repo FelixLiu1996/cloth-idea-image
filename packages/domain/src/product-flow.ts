@@ -46,6 +46,76 @@ export const garmentChangeAreaLabels: Record<GarmentChangeArea, string> = {
   presentation: "商品图构图",
 };
 
+export const garmentRefinementAxisIds = [
+  "silhouette-proportion",
+  "fabric-paneling",
+  "color-finish",
+  "decrease-intensity",
+  "increase-intensity",
+] as const;
+export type GarmentRefinementAxisId = (typeof garmentRefinementAxisIds)[number];
+
+export interface GarmentRefinementAxisOption {
+  readonly id: GarmentRefinementAxisId;
+  readonly kind: "dimension" | "intensity";
+  readonly label: string;
+  readonly description: string;
+  readonly instruction: string;
+}
+
+export const garmentRefinementAxisOptions: readonly GarmentRefinementAxisOption[] = [
+  {
+    id: "silhouette-proportion",
+    kind: "dimension",
+    label: "廓形与比例",
+    description: "只探索松量、肩线和长短比例",
+    instruction:
+      "本轮只探索廓形与比例：调整松量、肩线或长短比例；保持面料、色彩、领型、门襟、袖口、口袋、辅料、工艺和已锁定元素不变",
+  },
+  {
+    id: "fabric-paneling",
+    kind: "dimension",
+    label: "面料与拼接",
+    description: "只探索材质组合和拼接关系",
+    instruction:
+      "本轮只探索面料与拼接：调整主辅面料、材质组合或拼接关系；保持品类、整体廓形与比例、领型、门襟、袖型、口袋、色彩基调和已锁定元素不变",
+  },
+  {
+    id: "color-finish",
+    kind: "dimension",
+    label: "色彩与工艺",
+    description: "只探索配色、洗水、明线或表面工艺",
+    instruction:
+      "本轮只探索色彩与工艺：调整配色、洗水、明线或表面工艺；保持品类、廓形比例、结构分割、部件位置、面料类型和已锁定元素不变",
+  },
+  {
+    id: "decrease-intensity",
+    kind: "intensity",
+    label: "改得更保守",
+    description: "减少新增结构，优先保留原款识别度",
+    instruction:
+      "本轮降低改款幅度：减少新增结构和装饰，优先保留原款识别特征，只保留当前方向中最必要的变化；所有已锁定元素必须不变",
+  },
+  {
+    id: "increase-intensity",
+    kind: "intensity",
+    label: "改得更明显",
+    description: "在锁定项范围内强化当前设计方向",
+    instruction:
+      "本轮提高改款幅度：在不改变品类且不违反已锁定元素的前提下，让当前方向的结构、比例或细节变化更明显；不得无关改色、换面料或改变商品图构图",
+  },
+];
+
+export function findGarmentRefinementAxisOption(
+  axisId: GarmentRefinementAxisId,
+): GarmentRefinementAxisOption {
+  const option = garmentRefinementAxisOptions.find((candidate) => candidate.id === axisId);
+  if (!option) {
+    throw new Error(`Unknown garment refinement axis: ${axisId}`);
+  }
+  return option;
+}
+
 const preservableFactKeys = new Set<GarmentFactKey>(
   garmentFactKeys.filter((key) => key !== "presentation"),
 );
@@ -194,6 +264,7 @@ export function createGarmentResultReviewPlan(
 export function createGarmentRefinementInstruction(
   reviewItems: readonly GarmentResultReviewItem[],
   userInstruction = "",
+  axisId: GarmentRefinementAxisId | null = null,
 ): string {
   const issueInstructions = reviewItems.map((item) => {
     if (item.kind === "preservation") {
@@ -205,17 +276,23 @@ export function createGarmentRefinementInstruction(
     return `修正“${item.title}”`;
   });
   const normalizedUserInstruction = userInstruction.trim().replace(/\s+/g, " ");
+  const axisInstruction = axisId ? findGarmentRefinementAxisOption(axisId).instruction : "";
 
-  if (issueInstructions.length === 0 && !normalizedUserInstruction) {
+  if (issueInstructions.length === 0 && !normalizedUserInstruction && !axisInstruction) {
     return "";
   }
 
-  const unchangedSuffix = "其余已确认元素和设计方向保持不变。";
-  const body = normalizedUserInstruction
-    ? `用户补充要求：${normalizedUserInstruction}${
-        issueInstructions.length > 0 ? `；同时修正以下问题：${issueInstructions.join("；")}` : ""
-      }`
-    : `请修正以下问题：${issueInstructions.join("；")}`;
+  const unchangedSuffix = axisInstruction
+    ? "除选中维度和明确问题外，其余已确认元素和设计方向保持不变。"
+    : "其余已确认元素和设计方向保持不变。";
+  const clauses = [
+    axisInstruction,
+    normalizedUserInstruction
+      ? `${axisInstruction ? "在上述范围内执行用户补充要求" : "用户补充要求"}：${normalizedUserInstruction}`
+      : "",
+    issueInstructions.length > 0 ? `同时修正以下问题：${issueInstructions.join("；")}` : "",
+  ].filter(Boolean);
+  const body = clauses.join("；");
   const maximumBodyLength = 500 - unchangedSuffix.length - 1;
   return `${body.slice(0, maximumBodyLength)}。${unchangedSuffix}`;
 }
