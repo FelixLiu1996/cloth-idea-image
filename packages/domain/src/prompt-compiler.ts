@@ -126,9 +126,11 @@ export function compileGarmentIterationPrompt(input: CompileGarmentIterationProm
   const preservationTarget = input.usesOriginalSourceImage ? "原始任务约束" : "上一版";
 
   return [
-    `这是局部编辑任务。本轮重点：${latestInstruction}。只修改累计指令直接涉及的区域；没有被要求改变的结构、面料、颜色、白平衡和构图必须保持${preservationTarget}，各条累计修改不得互相覆盖。`,
+    `这是图像编辑任务。最高优先级执行最新一条用户修改：${latestInstruction}。输出图片必须让这条修改产生肉眼可见的结果，不能只复述要求或返回近似未修改图片。`,
+    "替换规则：当最新指令明确要求把颜色、面料、结构或部件“改为/换成”新值时，新值必须覆盖原图事实、基础设计方向和较早追加修改中的同维度旧值；原始描述只约束未修改维度，不能把被替换维度恢复成旧值。用户明确确认的必须保留项除外。",
+    `只修改累计指令直接涉及的区域；没有被要求改变的结构、面料、颜色、白平衡和构图必须保持${preservationTarget}。不同维度的累计修改继续生效，同一维度出现新旧值时以最新指令为准。`,
     sourceContext,
-    `累计追加修改（按顺序全部执行）：\n${revisionInstructions
+    `累计追加修改（同一维度以最后一条为准，其他维度全部保留）：\n${revisionInstructions
       .map((instruction, index) => `${index + 1}. ${instruction}`)
       .join("\n")}`,
     "追加修改的优先级低于必须保留项和结构硬约束。若追加要求与硬约束冲突，以硬约束为准，不得为了执行局部修改破坏服装的可生产性。",

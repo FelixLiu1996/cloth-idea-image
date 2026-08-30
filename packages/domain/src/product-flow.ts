@@ -84,9 +84,9 @@ export const garmentRefinementAxisOptions: readonly GarmentRefinementAxisOption[
     id: "color-finish",
     kind: "dimension",
     label: "色彩与工艺",
-    description: "只探索配色、洗水、明线或表面工艺",
+    description: "明确换主色，或只探索洗水、明线和表面工艺",
     instruction:
-      "本轮只探索色彩与工艺：调整配色、洗水、明线或表面工艺；保持品类、廓形比例、结构分割、部件位置、面料类型和已锁定元素不变",
+      "本轮只探索色彩与工艺：若指定目标颜色，必须明显替换服装主体主色而非只改变光影；否则按用户文字调整洗水、明线或表面工艺；保持品类、廓形比例、结构分割、部件位置、面料类型和已锁定元素不变",
   },
   {
     id: "decrease-intensity",
@@ -114,6 +114,90 @@ export function findGarmentRefinementAxisOption(
     throw new Error(`Unknown garment refinement axis: ${axisId}`);
   }
   return option;
+}
+
+export const garmentRefinementColorIds = [
+  "red",
+  "burgundy",
+  "navy",
+  "charcoal",
+  "olive",
+  "coffee",
+] as const;
+export type GarmentRefinementColorId = (typeof garmentRefinementColorIds)[number];
+
+export interface GarmentRefinementColorOption {
+  readonly id: GarmentRefinementColorId;
+  readonly label: string;
+  readonly hex: `#${string}`;
+  readonly aliases: readonly string[];
+}
+
+export const garmentRefinementColorOptions: readonly GarmentRefinementColorOption[] = [
+  { id: "red", label: "红色", hex: "#B7352F", aliases: ["红色", "正红", "大红"] },
+  { id: "burgundy", label: "酒红", hex: "#762F3A", aliases: ["酒红", "酒红色", "勃艮第红"] },
+  { id: "navy", label: "深藏蓝", hex: "#26344A", aliases: ["深藏蓝", "藏蓝", "藏青"] },
+  { id: "charcoal", label: "炭黑", hex: "#2E2D2B", aliases: ["炭黑", "黑色", "深黑"] },
+  { id: "olive", label: "橄榄绿", hex: "#5B6246", aliases: ["橄榄绿", "军绿", "军绿色"] },
+  { id: "coffee", label: "咖啡棕", hex: "#654839", aliases: ["咖啡棕", "咖啡色", "棕色"] },
+];
+
+export function findGarmentRefinementColorOption(
+  colorId: GarmentRefinementColorId,
+): GarmentRefinementColorOption {
+  const option = garmentRefinementColorOptions.find((candidate) => candidate.id === colorId);
+  if (!option) {
+    throw new Error(`Unknown garment refinement color: ${colorId}`);
+  }
+  return option;
+}
+
+export interface GarmentRefinementColorTarget {
+  readonly label: string;
+  readonly hex: `#${string}` | null;
+  readonly optionId: GarmentRefinementColorId | null;
+}
+
+export function detectGarmentRefinementColorTarget(
+  instruction: string,
+): GarmentRefinementColorTarget | null {
+  const normalized = instruction.trim().replace(/\s+/g, "");
+  const replacementTarget = normalized.match(
+    /(?:改成|改为|换成|换为|变成|变为|调整为|替换为|使用)([^，。；,.！？!?]{1,18})/,
+  )?.[1];
+  if (!replacementTarget) {
+    return null;
+  }
+  const knownOption = garmentRefinementColorOptions
+    .flatMap((option) => option.aliases.map((alias) => ({ alias, option })))
+    .sort((left, right) => right.alias.length - left.alias.length)
+    .find(({ alias }) => replacementTarget.includes(alias))?.option;
+  if (knownOption) {
+    return { label: knownOption.label, hex: knownOption.hex, optionId: knownOption.id };
+  }
+  const customTarget = replacementTarget.match(
+    /^(.{1,8}?(?:色|红|蓝|绿|黑|白|灰|棕|紫|黄|橙|粉|金|银|杏|青))(?:其余|其他|保持|不变|$)/,
+  )?.[1];
+  if (!customTarget) {
+    return null;
+  }
+  return { label: customTarget, hex: null, optionId: null };
+}
+
+export function garmentRefinementNeedsColorTarget(instruction: string): boolean {
+  const normalized = instruction.trim().replace(/\s+/g, "");
+  if (!/(颜色|色彩|配色|主色|换色)/.test(normalized)) {
+    return false;
+  }
+  if (detectGarmentRefinementColorTarget(normalized)) {
+    return false;
+  }
+  return !/(洗水|做旧|明线|压线|绣花|印花|光泽|哑光|涂层|渐变|拼色|撞色)/.test(normalized);
+}
+
+function createGarmentColorReplacementInstruction(target: GarmentRefinementColorTarget): string {
+  const colorReference = target.hex ? `（色相参考 ${target.hex}）` : "";
+  return `最高优先级强制换色：将服装主体面料的主色明确替换为${target.label}${colorReference}；${target.label}必须覆盖服装主体的大面积区域，不能只出现在纽扣、明线、边饰、阴影或小面积点缀；禁止继续沿用输入原图或较早版本的原主色，也不得仅改变亮度、饱和度、白平衡或背景来冒充换色`;
 }
 
 const preservableFactKeys = new Set<GarmentFactKey>(
@@ -265,6 +349,7 @@ export function createGarmentRefinementInstruction(
   reviewItems: readonly GarmentResultReviewItem[],
   userInstruction = "",
   axisId: GarmentRefinementAxisId | null = null,
+  colorId: GarmentRefinementColorId | null = null,
 ): string {
   const issueInstructions = reviewItems.map((item) => {
     if (item.kind === "preservation") {
@@ -276,19 +361,34 @@ export function createGarmentRefinementInstruction(
     return `修正“${item.title}”`;
   });
   const normalizedUserInstruction = userInstruction.trim().replace(/\s+/g, " ");
-  const axisInstruction = axisId ? findGarmentRefinementAxisOption(axisId).instruction : "";
+  const selectedColor = colorId ? findGarmentRefinementColorOption(colorId) : null;
+  const colorTarget: GarmentRefinementColorTarget | null = selectedColor
+    ? { label: selectedColor.label, hex: selectedColor.hex, optionId: selectedColor.id }
+    : detectGarmentRefinementColorTarget(normalizedUserInstruction);
+  const effectiveAxisId = colorTarget ? "color-finish" : axisId;
+  const axisInstruction = effectiveAxisId
+    ? findGarmentRefinementAxisOption(effectiveAxisId).instruction
+    : "";
+  const colorInstruction = colorTarget ? createGarmentColorReplacementInstruction(colorTarget) : "";
 
-  if (issueInstructions.length === 0 && !normalizedUserInstruction && !axisInstruction) {
+  if (
+    issueInstructions.length === 0 &&
+    !normalizedUserInstruction &&
+    !axisInstruction &&
+    !colorInstruction
+  ) {
     return "";
   }
 
-  const unchangedSuffix = axisInstruction
-    ? "除选中维度和明确问题外，其余已确认元素和设计方向保持不变。"
-    : "其余已确认元素和设计方向保持不变。";
+  const unchangedSuffix =
+    axisInstruction || colorInstruction
+      ? "除选中维度和明确问题外，其余已确认元素和设计方向保持不变。"
+      : "其余已确认元素和设计方向保持不变。";
   const clauses = [
+    colorInstruction,
     axisInstruction,
     normalizedUserInstruction
-      ? `${axisInstruction ? "在上述范围内执行用户补充要求" : "用户补充要求"}：${normalizedUserInstruction}`
+      ? `${axisInstruction || colorInstruction ? "在上述范围内执行用户补充要求" : "用户补充要求"}：${normalizedUserInstruction}`
       : "",
     issueInstructions.length > 0 ? `同时修正以下问题：${issueInstructions.join("；")}` : "",
   ].filter(Boolean);

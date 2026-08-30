@@ -79,7 +79,9 @@ describe("AlibabaQwenImageProvider", () => {
     expect(requestBody.model).toBe("qwen-image-2.0-pro-2026-06-22");
     expect(requestBody.input.messages[0]?.content[0]?.image).toMatch(/^data:image\/png;base64,/);
     expect(requestBody.input.messages[0]?.content[1]?.image).toMatch(/^data:image\/jpeg;base64,/);
-    expect(requestBody.input.messages[0]?.content[2]?.text).toContain("必须从结果中完全删除");
+    expect(requestBody.input.messages[0]?.content[2]?.text).toMatch(
+      /^输入图里的商家型号.+必须从结果中完全删除/,
+    );
     expect(requestBody.parameters).toMatchObject({
       n: 1,
       prompt_extend: false,

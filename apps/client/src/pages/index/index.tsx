@@ -4,9 +4,12 @@ import {
   createPreserveItemSuggestions,
   findDesignDirection,
   findGarmentRefinementAxisOption,
+  findGarmentRefinementColorOption,
   formatGarmentPreserveItem,
   garmentChangeAreaLabels,
   garmentRefinementAxisOptions,
+  garmentRefinementColorOptions,
+  garmentRefinementNeedsColorTarget,
   maximumConfirmedPreserveItems,
   maximumPreserveItemsTextLength,
   mergePreserveItems,
@@ -15,6 +18,7 @@ import {
   type DesignIntensity,
   type GarmentAnalysisApiResponse,
   type GarmentRefinementAxisId,
+  type GarmentRefinementColorId,
   type GarmentResultReviewStatus,
   type GenerationApiResponse,
   type GenerationMode,
@@ -152,6 +156,9 @@ export default function Index() {
   const [reviewFeedbacks, setReviewFeedbacks] = useState<Record<string, string>>({});
   const [reviewChecklistOpen, setReviewChecklistOpen] = useState<Record<string, boolean>>({});
   const [reviewAxes, setReviewAxes] = useState<Record<string, GarmentRefinementAxisId | null>>({});
+  const [reviewColors, setReviewColors] = useState<Record<string, GarmentRefinementColorId | null>>(
+    {},
+  );
   const [changeDetailsOpen, setChangeDetailsOpen] = useState<Record<string, boolean>>({});
   const activeRequestKind: ModelRequestKind | null = analyzing
     ? "analysis"
@@ -322,6 +329,10 @@ export default function Index() {
   const activeReviewAxis = activeReviewAxisId
     ? findGarmentRefinementAxisOption(activeReviewAxisId)
     : null;
+  const activeReviewColorId = activeResult ? (reviewColors[activeResult.jobId] ?? null) : null;
+  const activeReviewColor = activeReviewColorId
+    ? findGarmentRefinementColorOption(activeReviewColorId)
+    : null;
   const activeReviewChecklistOpen = activeResult
     ? (reviewChecklistOpen[activeResult.jobId] ?? false)
     : false;
@@ -333,11 +344,19 @@ export default function Index() {
     selectedReviewIssues,
     activeReviewFeedback,
     activeReviewAxisId,
+    activeReviewColorId,
   );
+  const activeReviewNeedsColorTarget =
+    activeReviewColorId === null &&
+    ((activeReviewAxisId === "color-finish" &&
+      activeReviewFeedback.trim().length < 2 &&
+      selectedReviewIssues.length === 0) ||
+      garmentRefinementNeedsColorTarget(activeReviewFeedback));
   const canGenerateReviewRevision =
-    activeReviewAxisId !== null ||
-    selectedReviewIssues.length > 0 ||
-    activeReviewFeedback.trim().length >= 2;
+    !activeReviewNeedsColorTarget &&
+    (activeReviewAxisId !== null ||
+      selectedReviewIssues.length > 0 ||
+      activeReviewFeedback.trim().length >= 2);
   const locksFrozen = results.length > 0;
 
   function clearDerivedState() {
@@ -355,6 +374,7 @@ export default function Index() {
     setReviewFeedbacks({});
     setReviewChecklistOpen({});
     setReviewAxes({});
+    setReviewColors({});
     setChangeDetailsOpen({});
     setRequestFailure(null);
     setResultPreview("current");
@@ -725,6 +745,20 @@ export default function Index() {
     setReviewAxes((current) => ({
       ...current,
       [activeResult.jobId]: current[activeResult.jobId] === axisId ? null : axisId,
+    }));
+    if (axisId !== "color-finish" || activeReviewAxisId === axisId) {
+      setReviewColors((current) => ({ ...current, [activeResult.jobId]: null }));
+    }
+  }
+
+  function selectActiveReviewColor(colorId: GarmentRefinementColorId): void {
+    if (!activeResult || busy) {
+      return;
+    }
+    setReviewAxes((current) => ({ ...current, [activeResult.jobId]: "color-finish" }));
+    setReviewColors((current) => ({
+      ...current,
+      [activeResult.jobId]: current[activeResult.jobId] === colorId ? null : colorId,
     }));
   }
 
@@ -1648,25 +1682,62 @@ export default function Index() {
                         })}
                     </View>
                   </View>
+                  {activeReviewAxisId === "color-finish" && (
+                    <View className="refinement-color-section">
+                      <Text className="refinement-color-title">目标主色</Text>
+                      <Text className="refinement-color-copy">
+                        请选择明确颜色；只说“颜色不好看”不会继续消耗生图额度。
+                      </Text>
+                      <View className="refinement-color-grid">
+                        {garmentRefinementColorOptions.map((option) => {
+                          const selected = activeReviewColorId === option.id;
+                          return (
+                            <View
+                              key={option.id}
+                              className={`refinement-color-option ${selected ? "refinement-color-option--selected" : ""}`}
+                              onClick={() => selectActiveReviewColor(option.id)}
+                            >
+                              <View
+                                className="refinement-color-swatch"
+                                style={{ backgroundColor: option.hex }}
+                              />
+                              <Text className="refinement-color-label">{option.label}</Text>
+                              <Text className="refinement-color-state">
+                                {selected ? "已选" : ""}
+                              </Text>
+                            </View>
+                          );
+                        })}
+                      </View>
+                    </View>
+                  )}
                 </View>
                 <Textarea
                   className="review-feedback-input"
                   value={activeReviewFeedback}
                   maxlength={500}
                   placeholder={
-                    activeReviewAxisId
-                      ? "可补充细节，例如：下摆稍微收紧，其余保持不变"
-                      : "例如：胸前只保留一个斜插袋，袖口格纹不变，整体不要太宽松"
+                    activeReviewAxisId === "color-finish"
+                      ? "也可填写自定义颜色，例如：改成雾霾蓝；或描述洗水、明线等工艺"
+                      : activeReviewAxisId
+                        ? "可补充细节，例如：下摆稍微收紧，其余保持不变"
+                        : "例如：胸前只保留一个斜插袋，袖口格纹不变，整体不要太宽松"
                   }
                   onInput={(event) => updateActiveReviewFeedback(event.detail.value)}
                 />
                 {activeReviewAxis && (
                   <View className="refinement-axis-confirmation">
                     <Text className="refinement-axis-confirmation-title">
-                      本轮只调整：{activeReviewAxis.label}
+                      {activeReviewColor
+                        ? `本轮强制换色：${activeReviewColor.label}`
+                        : `本轮只调整：${activeReviewAxis.label}`}
                     </Text>
                     <Text className="refinement-axis-confirmation-copy">
-                      可以直接生成；补充文字和常见问题都是可选项。
+                      {activeReviewColor
+                        ? `服装主体必须明显变为${activeReviewColor.label}，其余维度保持不变。`
+                        : activeReviewNeedsColorTarget
+                          ? "请先选择目标颜色，或写清具体颜色/工艺后再生成。"
+                          : "可以直接生成；补充文字和常见问题都是可选项。"}
                     </Text>
                   </View>
                 )}
@@ -1707,7 +1778,9 @@ export default function Index() {
                   {refining
                     ? "正在处理修改任务…"
                     : !canGenerateReviewRevision
-                      ? "请选择或填写修改要求"
+                      ? activeReviewNeedsColorTarget
+                        ? "请选择目标颜色或写清具体工艺"
+                        : "请选择或填写修改要求"
                       : "生成修改后的下一版"}
                 </Button>
                 <Text className="review-cost-note">

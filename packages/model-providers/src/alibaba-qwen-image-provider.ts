@@ -180,7 +180,7 @@ export class AlibabaQwenImageProvider implements GarmentImageProvider {
                 content: [
                   ...(input.referenceImages ?? []).map((image) => ({ image: toDataUrl(image) })),
                   { image: toDataUrl(input.sourceImage) },
-                  { text: `${input.prompt}\n\n${sourceTextRemovalInstruction}` },
+                  { text: `${sourceTextRemovalInstruction}\n\n${input.prompt}` },
                 ],
               },
             ],

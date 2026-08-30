@@ -5,8 +5,11 @@ import {
   createGarmentRefinementInstruction,
   createGarmentResultReviewPlan,
   createPreserveItemSuggestions,
-  garmentRefinementAxisOptions,
+  detectGarmentRefinementColorTarget,
   formatGarmentPreserveItem,
+  garmentRefinementAxisOptions,
+  garmentRefinementColorOptions,
+  garmentRefinementNeedsColorTarget,
   parsePreserveItems,
   serializePreserveItems,
 } from "./product-flow";
@@ -180,6 +183,39 @@ describe("garment result review plan", () => {
     expect(instruction.length).toBeLessThanOrEqual(500);
   });
 
+  it("turns an explicit main-color replacement into a high-priority visible constraint", () => {
+    const instruction = createGarmentRefinementInstruction([], "外套颜色改成红色");
+
+    expect(instruction).toMatch(/^最高优先级强制换色/);
+    expect(instruction).toContain("服装主体面料的主色明确替换为红色（色相参考 #B7352F）");
+    expect(instruction).toContain("必须覆盖服装主体的大面积区域");
+    expect(instruction).toContain("禁止继续沿用输入原图或较早版本的原主色");
+    expect(instruction).toContain("在上述范围内执行用户补充要求：外套颜色改成红色");
+  });
+
+  it("supports a selected color target without requiring free text", () => {
+    const instruction = createGarmentRefinementInstruction([], "", "color-finish", "burgundy");
+
+    expect(instruction).toContain("主色明确替换为酒红（色相参考 #762F3A）");
+    expect(instruction).toContain("本轮只探索色彩与工艺");
+  });
+
+  it("requires a concrete target for vague color feedback but accepts explicit and craft edits", () => {
+    expect(garmentRefinementNeedsColorTarget("颜色不好看")).toBe(true);
+    expect(garmentRefinementNeedsColorTarget("换一个颜色")).toBe(true);
+    expect(garmentRefinementNeedsColorTarget("外套颜色改成红色")).toBe(false);
+    expect(garmentRefinementNeedsColorTarget("增加重洗水和对比明线")).toBe(false);
+    expect(detectGarmentRefinementColorTarget("外套改成酒红色")).toMatchObject({
+      optionId: "burgundy",
+      label: "酒红",
+    });
+    expect(detectGarmentRefinementColorTarget("主体颜色改成雾霾蓝，其余保持不变")).toEqual({
+      optionId: null,
+      label: "雾霾蓝",
+      hex: null,
+    });
+  });
+
   it("keeps refinement axis ids unique and separates dimensions from intensity controls", () => {
     expect(new Set(garmentRefinementAxisOptions.map((option) => option.id)).size).toBe(
       garmentRefinementAxisOptions.length,
@@ -190,5 +226,8 @@ describe("garment result review plan", () => {
     expect(
       garmentRefinementAxisOptions.filter((option) => option.kind === "intensity"),
     ).toHaveLength(2);
+    expect(new Set(garmentRefinementColorOptions.map((option) => option.id)).size).toBe(
+      garmentRefinementColorOptions.length,
+    );
   });
 });

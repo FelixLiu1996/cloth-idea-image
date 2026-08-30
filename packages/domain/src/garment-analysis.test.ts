@@ -119,9 +119,9 @@ describe("compileAnalyzedGarmentPrompt", () => {
     expect(prompt).toContain("禁止出现：品牌标志");
     expect(prompt).toContain("1. 袖型再宽松一点");
     expect(prompt).toContain("2. 门襟改成隐藏拉链");
-    expect(prompt).toContain("本轮重点：门襟改成隐藏拉链");
+    expect(prompt).toContain("最高优先级执行最新一条用户修改：门襟改成隐藏拉链");
     expect(prompt.match(/袖型再宽松一点/g)).toHaveLength(1);
-    expect(prompt.indexOf("本轮重点：门襟改成隐藏拉链")).toBeLessThan(
+    expect(prompt.indexOf("最高优先级执行最新一条用户修改：门襟改成隐藏拉链")).toBeLessThan(
       prompt.indexOf("必须完整保留：格纹袖口"),
     );
   });
@@ -137,5 +137,21 @@ describe("compileAnalyzedGarmentPrompt", () => {
     expect(prompt).toContain("重新构建已经选定的基础设计方向");
     expect(prompt).toContain("一次生成中完整执行下面所有累计修改");
     expect(prompt).toContain("不得只执行最后一条");
+  });
+
+  it("lets the latest explicit color replacement supersede older color guidance", () => {
+    const prompt = compileGarmentIterationPrompt({
+      basePrompt: "可信事实：主体为浅灰蓝。必须完整保留：短款夹克。",
+      revisionInstructions: [
+        "本轮只探索色彩与工艺：调整配色，其余保持不变",
+        "换一个颜色，其余保持不变",
+        "最高优先级强制换色：将服装主体面料的主色明确替换为红色（色相参考 #B7352F）",
+      ],
+      usesOriginalSourceImage: true,
+    });
+
+    expect(prompt).toContain("新值必须覆盖原图事实、基础设计方向和较早追加修改中的同维度旧值");
+    expect(prompt).toContain("同一维度出现新旧值时以最新指令为准");
+    expect(prompt.indexOf("主色明确替换为红色")).toBeLessThan(prompt.indexOf("主体为浅灰蓝"));
   });
 });
