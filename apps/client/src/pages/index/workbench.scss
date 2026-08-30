@@ -906,6 +906,26 @@ $studio-sage-soft: #edf1ec;
   margin-top: 16px;
 }
 
+.direction-context-block,
+.direction-risk-detail {
+  padding: 14px;
+  border: 1px solid $studio-line;
+  border-radius: 7px;
+  background: #f8f6f1;
+}
+
+.direction-detail-copy {
+  display: block;
+  margin-top: 7px;
+  color: $studio-muted;
+  font-size: 17px;
+  line-height: 1.5;
+}
+
+.direction-risk-detail {
+  margin-top: 14px;
+}
+
 .direction-overview,
 .direction-preserve-block,
 .change-item {
@@ -922,6 +942,47 @@ $studio-sage-soft: #edf1ec;
   border-color: #ddd2b8;
   border-radius: 8px;
   background: #faf5e7;
+}
+
+.review-note--collapsed {
+  padding: 16px 18px;
+}
+
+.review-note-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.review-note-heading .review-title {
+  display: block;
+  margin-bottom: 0;
+  font-size: 19px;
+}
+
+.review-note-summary,
+.review-note-toggle {
+  display: block;
+}
+
+.review-note-summary {
+  margin-top: 4px;
+  color: #806a40;
+  font-size: 16px;
+}
+
+.review-note-toggle {
+  flex: none;
+  color: $studio-accent;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.review-note-content {
+  margin-top: 14px;
+  padding-top: 13px;
+  border-top: 1px solid #ddd2b8;
 }
 
 .analysis-section .generate-button {
@@ -1042,8 +1103,8 @@ $studio-sage-soft: #edf1ec;
 }
 
 .result-change-summary {
-  margin: 0 24px 22px;
-  padding: 23px;
+  margin: 0 24px 14px;
+  padding: 17px 19px;
   border: 1px solid $studio-line;
   border-radius: 10px;
   background: #faf8f3;
@@ -1051,9 +1112,13 @@ $studio-sage-soft: #edf1ec;
 
 .result-change-heading {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
+}
+
+.result-change-heading-copy {
+  min-width: 0;
 }
 
 .result-change-kicker,
@@ -1066,18 +1131,17 @@ $studio-sage-soft: #edf1ec;
 }
 
 .result-change-kicker {
-  margin-bottom: 7px;
+  margin-bottom: 5px;
   color: $studio-accent;
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
-  letter-spacing: 3px;
+  letter-spacing: 1px;
 }
 
 .result-change-title {
   color: $studio-ink;
   font-family: "Songti SC", "STSong", serif;
-  font-size: 27px;
+  font-size: 23px;
   font-weight: 700;
 }
 
@@ -1092,10 +1156,15 @@ $studio-sage-soft: #edf1ec;
 }
 
 .result-change-context {
-  margin-top: 11px;
   color: $studio-muted;
   font-size: 18px;
   line-height: 1.55;
+}
+
+.result-change-details {
+  margin-top: 14px;
+  padding-top: 13px;
+  border-top: 1px solid $studio-line;
 }
 
 .result-change-list {
@@ -1124,9 +1193,12 @@ $studio-sage-soft: #edf1ec;
 }
 
 .result-change-toggle {
-  margin-top: 14px;
+  flex: none;
+  padding: 7px 10px;
+  border: 1px solid #d8cec2;
+  border-radius: 999px;
   color: $studio-accent;
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 700;
   text-align: center;
 }
@@ -1175,6 +1247,14 @@ $studio-sage-soft: #edf1ec;
   opacity: 1;
 }
 
+.result-professional-entry {
+  margin: -1px 24px 20px;
+  color: $studio-muted;
+  font-size: 17px;
+  font-weight: 700;
+  text-align: center;
+}
+
 .page-shell--h5 .comparison-image > img {
   display: block;
   width: 100% !important;
@@ -1186,7 +1266,7 @@ $studio-sage-soft: #edf1ec;
 
 .result-review-panel {
   margin: 0 24px 24px;
-  padding: 23px;
+  padding: 19px;
   border: 1px solid $studio-line;
   border-radius: 10px;
   background: #faf8f3;
@@ -1237,8 +1317,8 @@ $studio-sage-soft: #edf1ec;
 }
 
 .refinement-axis-panel {
-  margin-top: 18px;
-  padding: 18px;
+  margin-top: 14px;
+  padding: 15px;
   border: 1px solid $studio-line;
   border-radius: 8px;
   background: $studio-paper;
@@ -1291,7 +1371,7 @@ $studio-sage-soft: #edf1ec;
 
 .refinement-axis-option {
   min-width: 0;
-  padding: 14px;
+  padding: 12px 14px;
   border: 1px solid $studio-line;
   border-radius: 7px;
   background: #f7f5ef;
@@ -1491,7 +1571,7 @@ $studio-sage-soft: #edf1ec;
 .history-copy {
   display: block;
   max-width: 620px;
-  margin-top: 7px;
+  margin-top: 4px;
   color: $studio-muted;
   font-size: 17px;
   line-height: 1.5;
@@ -1689,6 +1769,10 @@ $studio-sage-soft: #edf1ec;
   .result-change-disclaimer,
   .history-copy,
   .history-active-badge,
+  .direction-detail-copy,
+  .review-note-summary,
+  .review-note-toggle,
+  .result-professional-entry,
   .refinement-axis-copy,
   .refinement-axis-group-label,
   .refinement-axis-option-state,
@@ -1797,6 +1881,10 @@ $studio-sage-soft: #edf1ec;
   .result-change-disclaimer,
   .history-copy,
   .history-active-badge,
+  .direction-detail-copy,
+  .review-note-summary,
+  .review-note-toggle,
+  .result-professional-entry,
   .refinement-axis-copy,
   .refinement-axis-group-label,
   .refinement-axis-option-state,

@@ -93,10 +93,10 @@ describe("result comparison", () => {
     });
 
     expect(summary).toMatchObject({
-      title: "本轮新增修改",
+      headline: "按本轮补充要求继续调整",
       items: [{ label: "本轮追加", instruction: "只保留一个胸袋" }],
     });
-    expect(summary.context).toContain("继续继承");
+    expect(summary.context).toContain("继续沿用");
   });
 
   it("explains that regeneration keeps the same design constraints", () => {
@@ -109,8 +109,26 @@ describe("result comparison", () => {
       preserveCount: 1,
     });
 
-    expect(summary.title).toBe("同方向重新生成");
+    expect(summary.headline).toBe("沿用当前方向，再出一个版本");
     expect(summary.context).toContain("没有新增修改指令");
     expect(summary.items).toHaveLength(2);
+  });
+
+  it("turns a long structured color prompt into a short visible target", () => {
+    const summary = createResultChangeSummary({
+      result: result({
+        operation: "refine",
+        revisionInstruction:
+          "最高优先级强制换色：将服装主体面料的主色明确替换为红色（色相参考 #B7352F）；红色必须覆盖服装主体的大面积区域，其余保持不变",
+      }),
+      direction,
+      directChangeRequest: "",
+      directStyleDirection: "",
+      intensityLabel: "中改",
+      preserveCount: 1,
+    });
+
+    expect(summary.headline).toBe("换色目标：红色");
+    expect(summary.items[0]?.instruction).toContain("最高优先级强制换色");
   });
 });

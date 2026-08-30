@@ -1,5 +1,7 @@
 import {
+  detectGarmentRefinementColorTarget,
   garmentChangeAreaLabels,
+  garmentRefinementAxisOptions,
   type DesignDirection,
   type GenerationApiResponse,
 } from "@cloth-idea/domain";
@@ -18,7 +20,7 @@ export interface ResultChangeItem {
 }
 
 export interface ResultChangeSummary {
-  readonly title: string;
+  readonly headline: string;
   readonly context: string;
   readonly items: readonly ResultChangeItem[];
 }
@@ -60,22 +62,38 @@ function directionItems(direction: DesignDirection | null): readonly ResultChang
   );
 }
 
+function refinementHeadline(instruction: string): string {
+  const colorTarget = detectGarmentRefinementColorTarget(instruction);
+  if (colorTarget) {
+    return `换色目标：${colorTarget.label}`;
+  }
+
+  const axis = garmentRefinementAxisOptions.find((option) => {
+    const instructionPrefix = option.instruction.split("：")[0];
+    return instructionPrefix ? instruction.includes(instructionPrefix) : false;
+  });
+  if (axis) {
+    return `调整重点：${axis.label}`;
+  }
+
+  return "按本轮补充要求继续调整";
+}
+
 export function createResultChangeSummary(
   input: CreateResultChangeSummaryInput,
 ): ResultChangeSummary {
   const directionChanges = directionItems(input.direction);
   const directionName = input.result.directionName ?? input.direction?.name;
   const inheritedContext = directionName
-    ? `继续继承「${directionName}」的 ${directionChanges.length} 项设计变化和 ${input.preserveCount} 项锁定内容。`
-    : `继续继承最初改款要求和 ${input.preserveCount} 项锁定内容。`;
+    ? `继续沿用「${directionName}」和已确认的锁定内容。`
+    : "继续沿用最初改款要求和已确认的锁定内容。";
 
   if (input.result.operation === "refine") {
+    const revisionInstruction = input.result.revisionInstruction ?? "";
     return {
-      title: "本轮新增修改",
+      headline: refinementHeadline(revisionInstruction),
       context: inheritedContext,
-      items: input.result.revisionInstruction
-        ? [{ label: "本轮追加", instruction: input.result.revisionInstruction }]
-        : [],
+      items: revisionInstruction ? [{ label: "本轮追加", instruction: revisionInstruction }] : [],
     };
   }
 
@@ -90,14 +108,14 @@ export function createResultChangeSummary(
 
   if (input.result.operation === "regenerate") {
     return {
-      title: "同方向重新生成",
+      headline: "沿用当前方向，再出一个版本",
       context: "本版没有新增修改指令；设计约束保持一致，图片差异来自重新生成。",
       items: baseItems,
     };
   }
 
   return {
-    title: directionName ? `按「${directionName}」生成` : "按原始要求直接生成",
+    headline: directionName ? `设计方向：${directionName}` : "按原始要求生成本版",
     context: `本版使用 ${input.intensityLabel}，并锁定 ${input.preserveCount} 项必须保留内容。`,
     items: baseItems,
   };

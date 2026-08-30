@@ -100,7 +100,7 @@ const reviewStatusLabels: Record<Exclude<GarmentResultReviewStatus, "pending">, 
   fail: "未通过",
 };
 
-type ResultReviewMode = "idle" | "satisfied" | "issues" | "detailed";
+type ResultReviewMode = "idle" | "issues" | "detailed";
 type WorkspacePanel = "brief" | "directions" | "result";
 type RequestFailureState = RequestFailure & {
   readonly useAnalysis?: boolean;
@@ -143,6 +143,7 @@ export default function Index() {
   const [confirmedPreserveItems, setConfirmedPreserveItems] = useState<string[]>([]);
   const [customPreserveItem, setCustomPreserveItem] = useState("");
   const [preserveEditorOpen, setPreserveEditorOpen] = useState(false);
+  const [analysisRemindersOpen, setAnalysisRemindersOpen] = useState(false);
   const [selectedDirectionId, setSelectedDirectionId] = useState<string | null>(null);
   const [selectedDirectionDetailsOpen, setSelectedDirectionDetailsOpen] = useState(false);
   const [results, setResults] = useState<GenerationApiResponse[]>([]);
@@ -301,11 +302,6 @@ export default function Index() {
   const activeChangeDetailsOpen = activeResult
     ? (changeDetailsOpen[activeResult.jobId] ?? false)
     : false;
-  const visibleActiveChangeItems = activeChangeSummary
-    ? activeChangeDetailsOpen
-      ? activeChangeSummary.items
-      : activeChangeSummary.items.slice(0, 3)
-    : [];
   const activeVersionNumber = activeResult
     ? results.findIndex((item) => item.jobId === activeResult.jobId) + 1
     : 0;
@@ -365,6 +361,7 @@ export default function Index() {
     setConfirmedPreserveItems([]);
     setCustomPreserveItem("");
     setPreserveEditorOpen(false);
+    setAnalysisRemindersOpen(false);
     setSelectedDirectionId(null);
     setSelectedDirectionDetailsOpen(false);
     setResults([]);
@@ -443,6 +440,7 @@ export default function Index() {
     setRequestFailure(null);
     void Taro.pageScrollTo({ scrollTop: 0, duration: 240 });
     setAnalysisResult(null);
+    setAnalysisRemindersOpen(false);
     setSelectedDirectionId(null);
     setSelectedDirectionDetailsOpen(false);
     setResults([]);
@@ -708,19 +706,6 @@ export default function Index() {
     setTimeout(() => {
       void Taro.pageScrollTo({ selector: "#result-review-panel", duration: 240 });
     }, 0);
-  }
-
-  function markActiveResultSatisfied(): void {
-    if (!activeResult) {
-      return;
-    }
-    setReviewStatuses((current) => ({
-      ...current,
-      [activeResult.jobId]: Object.fromEntries(
-        activeReviewPlan.map((item) => [item.id, "pass" as const]),
-      ),
-    }));
-    setActiveReviewMode("satisfied");
   }
 
   function toggleReviewIssue(itemId: string): void {
@@ -1110,9 +1095,10 @@ export default function Index() {
               <View>
                 <Text className="section-title">选择设计方向</Text>
                 <Text className="analysis-meta">
-                  采纳 {analysisResult.evidenceSummary.accepted} 项可见事实 · 待复核{" "}
-                  {analysisResult.evidenceSummary.needsReview} 项 · 未知{" "}
-                  {analysisResult.evidenceSummary.unknown} 项
+                  可见事实 {analysisResult.evidenceSummary.accepted} 项 · 待确认{" "}
+                  {analysisResult.evidenceSummary.needsReview +
+                    analysisResult.evidenceSummary.unknown}
+                  项
                 </Text>
               </View>
             </View>
@@ -1120,9 +1106,9 @@ export default function Index() {
             <View className="preserve-confirmation">
               <View className="preserve-confirmation-heading">
                 <View>
-                  <Text className="preserve-confirmation-title">确认本次锁定项</Text>
+                  <Text className="preserve-confirmation-title">锁定不想改变的元素</Text>
                   <Text className="preserve-confirmation-copy">
-                    AI 只提供高置信度可见事实作为候选；只有你确认的内容才会成为生图硬约束。
+                    可选；只有你选中的内容会成为硬约束。
                   </Text>
                 </View>
                 <Text className="preserve-count">
@@ -1149,9 +1135,7 @@ export default function Index() {
                   })}
                 </View>
               ) : (
-                <Text className="preserve-empty">
-                  尚未锁定具体元素，模型只会维持基本品类与主体。
-                </Text>
+                <Text className="preserve-empty">未额外锁定；系统仍会维持基本品类与主体。</Text>
               )}
 
               <View
@@ -1161,7 +1145,7 @@ export default function Index() {
                 <View>
                   <Text className="preserve-editor-toggle-title">补充锁定项（可选）</Text>
                   <Text className="preserve-editor-toggle-copy">
-                    从 {preserveSuggestions.length} 项高置信度可见事实中选择，正常情况可直接跳过。
+                    {preserveSuggestions.length} 项可见事实可供选择
                   </Text>
                 </View>
                 <Text className="preserve-editor-toggle-state">
@@ -1219,11 +1203,11 @@ export default function Index() {
                   </View>
                 </>
               )}
-              <Text className="preserve-footnote">
-                {locksFrozen
-                  ? "本轮已有生成版本，锁定项已冻结；需要调整时请重新分析，避免历史版本与新约束混淆。"
-                  : "上方“必须保留”是本次分析的原始硬约束；修改它会重新开始分析。"}
-              </Text>
+              {locksFrozen && (
+                <Text className="preserve-footnote">
+                  已有生成版本；如需更改锁定项，请重新分析。
+                </Text>
+              )}
             </View>
 
             <View className="direction-list">
@@ -1269,11 +1253,6 @@ export default function Index() {
                     </View>
                     {selected ? (
                       <>
-                        {recommended && (
-                          <Text className="recommendation-reason">
-                            推荐理由：{analysisResult.analysis.recommendationReason}
-                          </Text>
-                        )}
                         <View className="direction-selection-summary">
                           <View className="direction-selection-stat">
                             <Text className="direction-selection-label">改款幅度</Text>
@@ -1294,9 +1273,6 @@ export default function Index() {
                             </Text>
                           </View>
                         </View>
-                        <Text className="direction-selection-copy">
-                          {selectedIntensity.description}
-                        </Text>
                         <View
                           className="direction-detail-toggle"
                           onClick={(event) => {
@@ -1313,6 +1289,14 @@ export default function Index() {
                         </View>
                         {selectedDirectionDetailsOpen && (
                           <View className="direction-detail-content">
+                            {recommended && (
+                              <View className="direction-context-block">
+                                <Text className="direction-detail-title">为什么推荐</Text>
+                                <Text className="direction-detail-copy">
+                                  {analysisResult.analysis.recommendationReason}
+                                </Text>
+                              </View>
+                            )}
                             <View className="direction-preserve-block">
                               <Text className="direction-detail-title">继承的保留项</Text>
                               <View className="direction-preserve-list">
@@ -1342,6 +1326,12 @@ export default function Index() {
                                 </View>
                               ))}
                             </View>
+                            <View className="direction-risk-detail">
+                              <Text className="direction-detail-title">生产提示</Text>
+                              <Text className="direction-detail-copy">
+                                {direction.productionRisk.reason}
+                              </Text>
+                            </View>
                           </View>
                         )}
                       </>
@@ -1349,8 +1339,7 @@ export default function Index() {
                       <Text className="direction-expand-hint">点击选择此方向</Text>
                     )}
                     <Text className={`risk-label risk-label--${direction.productionRisk.level}`}>
-                      {riskLabels[direction.productionRisk.level]} ·{" "}
-                      {direction.productionRisk.reason}
+                      {riskLabels[direction.productionRisk.level]}
                     </Text>
                   </View>
                 );
@@ -1358,13 +1347,30 @@ export default function Index() {
             </View>
 
             {analysisResult.analysis.conflictsOrQuestions.length > 0 && (
-              <View className="review-note">
-                <Text className="review-title">分析提醒</Text>
-                {analysisResult.analysis.conflictsOrQuestions.map((question) => (
-                  <Text key={question} className="review-item">
-                    · {question}
+              <View className="review-note review-note--collapsed">
+                <View
+                  className="review-note-heading"
+                  onClick={() => setAnalysisRemindersOpen((current) => !current)}
+                >
+                  <View>
+                    <Text className="review-title">分析提醒</Text>
+                    <Text className="review-note-summary">
+                      {analysisResult.analysis.conflictsOrQuestions.length} 项需要你留意
+                    </Text>
+                  </View>
+                  <Text className="review-note-toggle">
+                    {analysisRemindersOpen ? "收起" : "查看"}
                   </Text>
-                ))}
+                </View>
+                {analysisRemindersOpen && (
+                  <View className="review-note-content">
+                    {analysisResult.analysis.conflictsOrQuestions.map((question) => (
+                      <Text key={question} className="review-item">
+                        · {question}
+                      </Text>
+                    ))}
+                  </View>
+                )}
               </View>
             )}
 
@@ -1471,52 +1477,6 @@ export default function Index() {
             </Text>
           </View>
 
-          {activeChangeSummary && (
-            <View className="result-change-summary">
-              <View className="result-change-heading">
-                <View>
-                  <Text className="result-change-kicker">VERSION NOTES</Text>
-                  <Text className="result-change-title">这版具体改了什么</Text>
-                </View>
-                <Text className="result-change-count">
-                  {activeChangeSummary.items.length} 项依据
-                </Text>
-              </View>
-              <Text className="result-change-context">{activeChangeSummary.context}</Text>
-              {visibleActiveChangeItems.length > 0 && (
-                <View className="result-change-list">
-                  {visibleActiveChangeItems.map((item, index) => (
-                    <View
-                      key={`${item.label}-${item.instruction}-${index}`}
-                      className="result-change-item"
-                    >
-                      <Text className="result-change-label">{item.label}</Text>
-                      <Text className="result-change-instruction">{item.instruction}</Text>
-                    </View>
-                  ))}
-                </View>
-              )}
-              {activeChangeSummary.items.length > 3 && (
-                <View
-                  className="result-change-toggle"
-                  onClick={() =>
-                    setChangeDetailsOpen((current) => ({
-                      ...current,
-                      [activeResult.jobId]: !activeChangeDetailsOpen,
-                    }))
-                  }
-                >
-                  {activeChangeDetailsOpen
-                    ? "收起完整生成依据"
-                    : `展开全部 ${activeChangeSummary.items.length} 项`}
-                </View>
-              )}
-              <Text className="result-change-disclaimer">
-                以上是发送给生图模型的设计依据，不代表系统已自动确认图片全部落实；请结合上方对照图判断。
-              </Text>
-            </View>
-          )}
-
           <View className="result-primary-actions">
             <Button
               className="result-primary-action result-primary-action--accent"
@@ -1540,327 +1500,312 @@ export default function Index() {
             </Button>
           </View>
 
-          <View id="result-review-panel" className="result-review-panel">
-            <View className="result-review-heading">
-              <View>
-                <Text className="result-review-title">这版效果怎么样？</Text>
-                <Text className="result-review-copy">
-                  不需要逐项确认；满意可以直接使用，有问题时再展开清单。
-                </Text>
-              </View>
-              {activeReviewMode === "detailed" && (
-                <Text className="result-review-progress">
-                  {
-                    activeReviewPlan.filter(
-                      (item) => (activeReviewStatuses[item.id] ?? "pending") !== "pending",
-                    ).length
-                  }
-                  /{activeReviewPlan.length}
-                </Text>
-              )}
-            </View>
-
-            {activeReviewMode === "idle" && (
-              <>
-                <View className="review-quick-actions">
-                  <Button
-                    className="review-quick-action review-quick-action--satisfied"
-                    onClick={markActiveResultSatisfied}
-                  >
-                    <Text className="review-quick-action-title">满意，直接使用</Text>
-                    <Text className="review-quick-action-copy">保存图片或按此方向再生成</Text>
-                  </Button>
-                  <Button
-                    className="review-quick-action review-quick-action--issues"
-                    onClick={openIssuesReview}
-                  >
-                    <Text className="review-quick-action-title">需要修改</Text>
-                    <Text className="review-quick-action-copy">选一个调整维度，或直接描述问题</Text>
-                  </Button>
+          {activeChangeSummary && (
+            <View className="result-change-summary">
+              <View className="result-change-heading">
+                <View className="result-change-heading-copy">
+                  <Text className="result-change-kicker">本版设计要求</Text>
+                  <Text className="result-change-title">{activeChangeSummary.headline}</Text>
                 </View>
                 <View
-                  className="review-secondary-link"
-                  onClick={() => setActiveReviewMode("detailed")}
+                  className="result-change-toggle"
+                  onClick={() =>
+                    setChangeDetailsOpen((current) => ({
+                      ...current,
+                      [activeResult.jobId]: !activeChangeDetailsOpen,
+                    }))
+                  }
                 >
-                  详细核对（可选）
-                </View>
-              </>
-            )}
-
-            {activeReviewMode === "satisfied" && (
-              <View className="review-resolution">
-                <Text className="review-resolution-title">已记录：这版满意</Text>
-                <Text className="review-resolution-copy">
-                  可以直接下载；这项记录仅保留在当前页面，不会额外调用模型。
-                </Text>
-                <View className="review-resolution-actions">
-                  <View
-                    className="review-secondary-link"
-                    onClick={() => setActiveReviewMode("issues")}
-                  >
-                    发现问题，需要修改
-                  </View>
-                  <View
-                    className="review-secondary-link"
-                    onClick={() => setActiveReviewMode("detailed")}
-                  >
-                    详细核对
-                  </View>
+                  {activeChangeDetailsOpen ? "收起" : "查看详情"}
                 </View>
               </View>
-            )}
-
-            {activeReviewMode === "issues" && (
-              <>
-                <View className="review-issue-heading">
-                  <Text className="review-issue-title">选择或写下怎么改</Text>
-                  <Text className="review-issue-count">
-                    {activeReviewAxisId
-                      ? "已选快捷调整"
-                      : `已勾选 ${selectedReviewIssues.length} 个问题`}
-                  </Text>
-                </View>
-                <Text className="review-issue-copy">
-                  可以先选一个快捷调整，也可以直接用自己的话描述；未明确修改的部分继续保持不变。
-                </Text>
-                <View className="refinement-axis-panel">
-                  <Text className="refinement-axis-title">本轮只想调整哪里？（可选）</Text>
-                  <Text className="refinement-axis-copy">
-                    一次只选一个，方便对照判断是否落实；再次点击可取消。
-                  </Text>
-                  <View className="refinement-axis-group">
-                    <Text className="refinement-axis-group-label">单维度探索</Text>
-                    <View className="refinement-axis-grid">
-                      {garmentRefinementAxisOptions
-                        .filter((option) => option.kind === "dimension")
-                        .map((option) => {
-                          const selected = activeReviewAxisId === option.id;
-                          return (
-                            <View
-                              key={option.id}
-                              className={`refinement-axis-option ${selected ? "refinement-axis-option--selected" : ""}`}
-                              onClick={() => selectActiveReviewAxis(option.id)}
-                            >
-                              <View className="refinement-axis-option-heading">
-                                <Text className="refinement-axis-option-label">{option.label}</Text>
-                                <Text className="refinement-axis-option-state">
-                                  {selected ? "已选" : "+"}
-                                </Text>
-                              </View>
-                              <Text className="refinement-axis-option-copy">
-                                {option.description}
-                              </Text>
-                            </View>
-                          );
-                        })}
-                    </View>
-                  </View>
-                  <View className="refinement-axis-group">
-                    <Text className="refinement-axis-group-label">调整改款幅度</Text>
-                    <View className="refinement-axis-grid refinement-axis-grid--intensity">
-                      {garmentRefinementAxisOptions
-                        .filter((option) => option.kind === "intensity")
-                        .map((option) => {
-                          const selected = activeReviewAxisId === option.id;
-                          return (
-                            <View
-                              key={option.id}
-                              className={`refinement-axis-option ${selected ? "refinement-axis-option--selected" : ""}`}
-                              onClick={() => selectActiveReviewAxis(option.id)}
-                            >
-                              <View className="refinement-axis-option-heading">
-                                <Text className="refinement-axis-option-label">{option.label}</Text>
-                                <Text className="refinement-axis-option-state">
-                                  {selected ? "已选" : "+"}
-                                </Text>
-                              </View>
-                              <Text className="refinement-axis-option-copy">
-                                {option.description}
-                              </Text>
-                            </View>
-                          );
-                        })}
-                    </View>
-                  </View>
-                  {activeReviewAxisId === "color-finish" && (
-                    <View className="refinement-color-section">
-                      <Text className="refinement-color-title">目标主色</Text>
-                      <Text className="refinement-color-copy">
-                        请选择明确颜色；只说“颜色不好看”不会继续消耗生图额度。
-                      </Text>
-                      <View className="refinement-color-grid">
-                        {garmentRefinementColorOptions.map((option) => {
-                          const selected = activeReviewColorId === option.id;
-                          return (
-                            <View
-                              key={option.id}
-                              className={`refinement-color-option ${selected ? "refinement-color-option--selected" : ""}`}
-                              onClick={() => selectActiveReviewColor(option.id)}
-                            >
-                              <View
-                                className="refinement-color-swatch"
-                                style={{ backgroundColor: option.hex }}
-                              />
-                              <Text className="refinement-color-label">{option.label}</Text>
-                              <Text className="refinement-color-state">
-                                {selected ? "已选" : ""}
-                              </Text>
-                            </View>
-                          );
-                        })}
-                      </View>
+              {activeChangeDetailsOpen && (
+                <View className="result-change-details">
+                  <Text className="result-change-context">{activeChangeSummary.context}</Text>
+                  {activeChangeSummary.items.length > 0 && (
+                    <View className="result-change-list">
+                      {activeChangeSummary.items.map((item, index) => (
+                        <View
+                          key={`${item.label}-${item.instruction}-${index}`}
+                          className="result-change-item"
+                        >
+                          <Text className="result-change-label">{item.label}</Text>
+                          <Text className="result-change-instruction">{item.instruction}</Text>
+                        </View>
+                      ))}
                     </View>
                   )}
-                </View>
-                <Textarea
-                  className="review-feedback-input"
-                  value={activeReviewFeedback}
-                  maxlength={500}
-                  placeholder={
-                    activeReviewAxisId === "color-finish"
-                      ? "也可填写自定义颜色，例如：改成雾霾蓝；或描述洗水、明线等工艺"
-                      : activeReviewAxisId
-                        ? "可补充细节，例如：下摆稍微收紧，其余保持不变"
-                        : "例如：胸前只保留一个斜插袋，袖口格纹不变，整体不要太宽松"
-                  }
-                  onInput={(event) => updateActiveReviewFeedback(event.detail.value)}
-                />
-                {activeReviewAxis && (
-                  <View className="refinement-axis-confirmation">
-                    <Text className="refinement-axis-confirmation-title">
-                      {activeReviewColor
-                        ? `本轮强制换色：${activeReviewColor.label}`
-                        : `本轮只调整：${activeReviewAxis.label}`}
-                    </Text>
-                    <Text className="refinement-axis-confirmation-copy">
-                      {activeReviewColor
-                        ? `服装主体必须明显变为${activeReviewColor.label}，其余维度保持不变。`
-                        : activeReviewNeedsColorTarget
-                          ? "请先选择目标颜色，或写清具体颜色/工艺后再生成。"
-                          : "可以直接生成；补充文字和常见问题都是可选项。"}
-                    </Text>
-                  </View>
-                )}
-                <View className="review-checklist-toggle" onClick={toggleActiveReviewChecklist}>
-                  <Text className="review-checklist-label">常见问题（可选）</Text>
-                  <Text className="review-checklist-state">
-                    {activeReviewChecklistOpen ? "收起" : "展开"}
+                  <Text className="result-change-disclaimer">
+                    这里记录的是发送给生图模型的设计依据，请结合图片自行判断是否落实。
                   </Text>
                 </View>
-                {activeReviewChecklistOpen && (
-                  <View className="review-issue-list">
+              )}
+            </View>
+          )}
+
+          {activeReviewMode === "idle" && (
+            <View
+              className="result-professional-entry"
+              onClick={() => setActiveReviewMode("detailed")}
+            >
+              专业核对（可选）
+            </View>
+          )}
+
+          {activeReviewMode !== "idle" && (
+            <View id="result-review-panel" className="result-review-panel">
+              <View className="result-review-heading">
+                <Text className="result-review-title">
+                  {activeReviewMode === "issues" ? "怎么调整？" : "专业核对"}
+                </Text>
+                {activeReviewMode === "detailed" && (
+                  <Text className="result-review-progress">
+                    {
+                      activeReviewPlan.filter(
+                        (item) => (activeReviewStatuses[item.id] ?? "pending") !== "pending",
+                      ).length
+                    }
+                    /{activeReviewPlan.length}
+                  </Text>
+                )}
+              </View>
+
+              {activeReviewMode === "issues" && (
+                <>
+                  <View className="refinement-axis-panel">
+                    <Text className="refinement-axis-title">快捷调整（可选）</Text>
+                    <View className="refinement-axis-group">
+                      <Text className="refinement-axis-group-label">单维度探索</Text>
+                      <View className="refinement-axis-grid">
+                        {garmentRefinementAxisOptions
+                          .filter((option) => option.kind === "dimension")
+                          .map((option) => {
+                            const selected = activeReviewAxisId === option.id;
+                            return (
+                              <View
+                                key={option.id}
+                                className={`refinement-axis-option ${selected ? "refinement-axis-option--selected" : ""}`}
+                                onClick={() => selectActiveReviewAxis(option.id)}
+                              >
+                                <View className="refinement-axis-option-heading">
+                                  <Text className="refinement-axis-option-label">
+                                    {option.label}
+                                  </Text>
+                                  <Text className="refinement-axis-option-state">
+                                    {selected ? "已选" : "+"}
+                                  </Text>
+                                </View>
+                                {selected && (
+                                  <Text className="refinement-axis-option-copy">
+                                    {option.description}
+                                  </Text>
+                                )}
+                              </View>
+                            );
+                          })}
+                      </View>
+                    </View>
+                    <View className="refinement-axis-group">
+                      <Text className="refinement-axis-group-label">调整改款幅度</Text>
+                      <View className="refinement-axis-grid refinement-axis-grid--intensity">
+                        {garmentRefinementAxisOptions
+                          .filter((option) => option.kind === "intensity")
+                          .map((option) => {
+                            const selected = activeReviewAxisId === option.id;
+                            return (
+                              <View
+                                key={option.id}
+                                className={`refinement-axis-option ${selected ? "refinement-axis-option--selected" : ""}`}
+                                onClick={() => selectActiveReviewAxis(option.id)}
+                              >
+                                <View className="refinement-axis-option-heading">
+                                  <Text className="refinement-axis-option-label">
+                                    {option.label}
+                                  </Text>
+                                  <Text className="refinement-axis-option-state">
+                                    {selected ? "已选" : "+"}
+                                  </Text>
+                                </View>
+                                {selected && (
+                                  <Text className="refinement-axis-option-copy">
+                                    {option.description}
+                                  </Text>
+                                )}
+                              </View>
+                            );
+                          })}
+                      </View>
+                    </View>
+                    {activeReviewAxisId === "color-finish" && (
+                      <View className="refinement-color-section">
+                        <Text className="refinement-color-title">目标主色</Text>
+                        <Text className="refinement-color-copy">选一个颜色，或在下方自定义。</Text>
+                        <View className="refinement-color-grid">
+                          {garmentRefinementColorOptions.map((option) => {
+                            const selected = activeReviewColorId === option.id;
+                            return (
+                              <View
+                                key={option.id}
+                                className={`refinement-color-option ${selected ? "refinement-color-option--selected" : ""}`}
+                                onClick={() => selectActiveReviewColor(option.id)}
+                              >
+                                <View
+                                  className="refinement-color-swatch"
+                                  style={{ backgroundColor: option.hex }}
+                                />
+                                <Text className="refinement-color-label">{option.label}</Text>
+                                <Text className="refinement-color-state">
+                                  {selected ? "已选" : ""}
+                                </Text>
+                              </View>
+                            );
+                          })}
+                        </View>
+                      </View>
+                    )}
+                  </View>
+                  <Textarea
+                    className="review-feedback-input"
+                    value={activeReviewFeedback}
+                    maxlength={500}
+                    placeholder={
+                      activeReviewAxisId === "color-finish"
+                        ? "自定义颜色或工艺，例如：改成雾霾蓝"
+                        : activeReviewAxisId
+                          ? "补充细节，例如：下摆稍微收紧"
+                          : "直接描述要修改的地方"
+                    }
+                    onInput={(event) => updateActiveReviewFeedback(event.detail.value)}
+                  />
+                  {activeReviewAxis && (
+                    <View className="refinement-axis-confirmation">
+                      <Text className="refinement-axis-confirmation-title">
+                        {activeReviewColor
+                          ? `主体换为${activeReviewColor.label}，其余保持`
+                          : activeReviewNeedsColorTarget
+                            ? "请选择目标颜色或写清具体工艺"
+                            : `只调整${activeReviewAxis.label}，其余保持`}
+                      </Text>
+                    </View>
+                  )}
+                  <View className="review-checklist-toggle" onClick={toggleActiveReviewChecklist}>
+                    <Text className="review-checklist-label">常见问题（可选）</Text>
+                    <Text className="review-checklist-state">
+                      {activeReviewChecklistOpen ? "收起" : "展开"}
+                    </Text>
+                  </View>
+                  {activeReviewChecklistOpen && (
+                    <View className="review-issue-list">
+                      {activeReviewPlan.map((item) => {
+                        const status = activeReviewStatuses[item.id] ?? "pending";
+                        const selected = status === "question" || status === "fail";
+                        return (
+                          <View
+                            key={item.id}
+                            className={`review-issue-item ${selected ? "review-issue-item--selected" : ""}`}
+                            onClick={() => toggleReviewIssue(item.id)}
+                          >
+                            <Text className="review-issue-check">{selected ? "✓" : ""}</Text>
+                            <View className="review-issue-content">
+                              <Text className={`review-kind review-kind--${item.kind}`}>
+                                {reviewKindLabels[item.kind]}
+                              </Text>
+                              <Text className="review-issue-item-title">{item.title}</Text>
+                            </View>
+                          </View>
+                        );
+                      })}
+                    </View>
+                  )}
+                  <Button
+                    className="review-apply-button"
+                    disabled={busy || !canGenerateReviewRevision}
+                    onClick={generateReviewRevision}
+                  >
+                    {refining
+                      ? "正在处理修改任务…"
+                      : !canGenerateReviewRevision
+                        ? activeReviewNeedsColorTarget
+                          ? "请选择目标颜色或写清具体工艺"
+                          : "请选择或填写修改要求"
+                        : "生成修改后的下一版"}
+                  </Button>
+                  <Text className="review-cost-note">
+                    生成下一版使用 1 次额度 · 预计 10–30 秒{!image ? " · 优先复用云端原图" : ""}
+                  </Text>
+                  <View className="review-resolution-actions">
+                    <View
+                      className="review-secondary-link"
+                      onClick={() => setActiveReviewMode("idle")}
+                    >
+                      返回
+                    </View>
+                    <View
+                      className="review-secondary-link"
+                      onClick={() => setActiveReviewMode("detailed")}
+                    >
+                      切换到专业核对
+                    </View>
+                  </View>
+                </>
+              )}
+
+              {activeReviewMode === "detailed" && (
+                <>
+                  <Text className="review-detail-note">可选的专业检查；不会自动调用模型。</Text>
+                  <View className="result-review-list">
                     {activeReviewPlan.map((item) => {
                       const status = activeReviewStatuses[item.id] ?? "pending";
-                      const selected = status === "question" || status === "fail";
                       return (
                         <View
                           key={item.id}
-                          className={`review-issue-item ${selected ? "review-issue-item--selected" : ""}`}
-                          onClick={() => toggleReviewIssue(item.id)}
+                          className={`result-review-item result-review-item--${status}`}
                         >
-                          <Text className="review-issue-check">{selected ? "✓" : ""}</Text>
-                          <View className="review-issue-content">
+                          <View className="result-review-item-heading">
                             <Text className={`review-kind review-kind--${item.kind}`}>
                               {reviewKindLabels[item.kind]}
                             </Text>
-                            <Text className="review-issue-item-title">{item.title}</Text>
+                            <Text className="review-current-status">
+                              {status === "pending" ? "待确认" : reviewStatusLabels[status]}
+                            </Text>
+                          </View>
+                          <Text className="result-review-item-title">{item.title}</Text>
+                          <Text className="result-review-instruction">{item.instruction}</Text>
+                          <View className="review-status-actions">
+                            {(
+                              Object.keys(reviewStatusLabels) as Exclude<
+                                GarmentResultReviewStatus,
+                                "pending"
+                              >[]
+                            ).map((nextStatus) => (
+                              <View
+                                key={nextStatus}
+                                className={`review-status-action review-status-action--${nextStatus} ${status === nextStatus ? "review-status-action--active" : ""}`}
+                                onClick={() => updateReviewStatus(item.id, nextStatus)}
+                              >
+                                {reviewStatusLabels[nextStatus]}
+                              </View>
+                            ))}
                           </View>
                         </View>
                       );
                     })}
                   </View>
-                )}
-                <Button
-                  className="review-apply-button"
-                  disabled={busy || !canGenerateReviewRevision}
-                  onClick={generateReviewRevision}
-                >
-                  {refining
-                    ? "正在处理修改任务…"
-                    : !canGenerateReviewRevision
-                      ? activeReviewNeedsColorTarget
-                        ? "请选择目标颜色或写清具体工艺"
-                        : "请选择或填写修改要求"
-                      : "生成修改后的下一版"}
-                </Button>
-                <Text className="review-cost-note">
-                  选择、填写和勾选都不会调用模型；点击生成后使用 1 次生图额度，预计 10–30 秒。
-                  {!image ? " 小程序会优先复用云端原图，过期时再提示重新上传。" : ""}
-                </Text>
-                <View className="review-resolution-actions">
+                  {selectedReviewIssues.length > 0 && (
+                    <Button className="review-apply-button" onClick={applySelectedReviewIssues}>
+                      {`将 ${selectedReviewIssues.length} 个问题填入修改要求`}
+                    </Button>
+                  )}
                   <View
-                    className="review-secondary-link"
+                    className="review-secondary-link review-secondary-link--standalone"
                     onClick={() => setActiveReviewMode("idle")}
                   >
-                    返回
+                    返回简洁模式
                   </View>
-                  <View
-                    className="review-secondary-link"
-                    onClick={() => setActiveReviewMode("detailed")}
-                  >
-                    切换到详细核对
-                  </View>
-                </View>
-              </>
-            )}
-
-            {activeReviewMode === "detailed" && (
-              <>
-                <Text className="review-detail-note">
-                  详细核对仅用于专业评审；存疑和未通过项目可自动整理成修改要求。
-                </Text>
-                <View className="result-review-list">
-                  {activeReviewPlan.map((item) => {
-                    const status = activeReviewStatuses[item.id] ?? "pending";
-                    return (
-                      <View
-                        key={item.id}
-                        className={`result-review-item result-review-item--${status}`}
-                      >
-                        <View className="result-review-item-heading">
-                          <Text className={`review-kind review-kind--${item.kind}`}>
-                            {reviewKindLabels[item.kind]}
-                          </Text>
-                          <Text className="review-current-status">
-                            {status === "pending" ? "待确认" : reviewStatusLabels[status]}
-                          </Text>
-                        </View>
-                        <Text className="result-review-item-title">{item.title}</Text>
-                        <Text className="result-review-instruction">{item.instruction}</Text>
-                        <View className="review-status-actions">
-                          {(
-                            Object.keys(reviewStatusLabels) as Exclude<
-                              GarmentResultReviewStatus,
-                              "pending"
-                            >[]
-                          ).map((nextStatus) => (
-                            <View
-                              key={nextStatus}
-                              className={`review-status-action review-status-action--${nextStatus} ${status === nextStatus ? "review-status-action--active" : ""}`}
-                              onClick={() => updateReviewStatus(item.id, nextStatus)}
-                            >
-                              {reviewStatusLabels[nextStatus]}
-                            </View>
-                          ))}
-                        </View>
-                      </View>
-                    );
-                  })}
-                </View>
-                {selectedReviewIssues.length > 0 && (
-                  <Button className="review-apply-button" onClick={applySelectedReviewIssues}>
-                    {`将 ${selectedReviewIssues.length} 个问题填入修改要求`}
-                  </Button>
-                )}
-                <View
-                  className="review-secondary-link review-secondary-link--standalone"
-                  onClick={() => setActiveReviewMode("idle")}
-                >
-                  返回简洁模式
-                </View>
-              </>
-            )}
-          </View>
+                </>
+              )}
+            </View>
+          )}
         </View>
       )}
 
@@ -1869,9 +1814,7 @@ export default function Index() {
           <View className="history-heading">
             <View className="history-heading-copy">
               <Text className="section-title">本次生成历史</Text>
-              <Text className="history-copy">
-                点选任一版本查看；从旧版本继续修改会建立新分支，不会覆盖后续版本。
-              </Text>
+              <Text className="history-copy">点选版本可查看或继续修改。</Text>
             </View>
             <Text className="history-count">{results.length} 个版本</Text>
           </View>
